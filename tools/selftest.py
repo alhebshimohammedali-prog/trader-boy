@@ -304,6 +304,8 @@ def test_critique():
     r = combine(d("proceed", 1.0), d("veto", 0.0, "critic"))
     check("critic can veto an approved trade", r.action == "veto" and r.size_multiplier == 0.0)
     check("override is recorded in the reasoning", "CRITIC OVERRODE" in r.reasoning)
+    check("the BINDING reason leads", r.reasoning.startswith("CRITIC OVERRODE"),
+          "logs truncate; a veto that opens with the approval reads as a bug")
 
     r = combine(d("veto", 0.0), d("proceed", 1.0, "critic"))
     check("critic CANNOT upgrade a veto", r.action == "veto", f"got {r.action}")

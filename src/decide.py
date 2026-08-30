@@ -101,6 +101,27 @@ Your authority is one-way. You can veto, or shrink the size. You can never
 approve something the first pass rejected, and you can never increase size.
 If you find nothing wrong, return the first pass verdict unchanged.
 
+THE STRATEGY IS FIXED AND IS NOT WHAT YOU ARE REVIEWING.
+Cash-secured short puts, single leg, expiring Fri 4 Sep, struck 16-30
+delta or 1-2.5% OTM. Collateral is strike x 100, capped at 25% of equity
+per position and 50-60% across the portfolio.
+
+These are deliberate design choices. None of them is a defect and none is
+grounds for a veto:
+
+- The 4 Sep expiry falls AFTER the Thu 3 Sep mark. That is intentional.
+  Equity is marked while the contracts are still open, so nearly all the
+  decay is captured and nothing settles inside the measured window. A
+  position being open at the mark is the plan, not a settlement risk.
+- Positions are held to the mark rather than closed. Unrealised P&L
+  counts, and closing costs the spread.
+- Short puts carry assignment risk and long delta. Known and accepted.
+- Selling puts is not a hedged position. Also known and accepted.
+
+You are reviewing THIS CANDIDATE against the strategy, never the strategy
+itself. If your objection would apply equally to every trade the agent
+could ever make, it is not a defect in this one and you must let it stand.
+
 Do not simply agree because the first pass was confident. Do not invent a
 defect either. Look for the specific things a first pass rationalises:
 
@@ -489,7 +510,11 @@ def combine(first: Decision, second: Decision | None) -> Decision:
         raw=first.raw,
     )
     if keep is second:
-        out.reasoning = f"{first.reasoning} | CRITIC OVERRODE: {second.reasoning}"
+        # The critic's reason is the BINDING one, so it leads. Logs truncate,
+        # and the first live run printed "NO TRADE:" followed by the first
+        # pass explaining why the trade was fine, which reads as a bug.
+        out.reasoning = (f"CRITIC OVERRODE: {second.reasoning} "
+                         f"| first pass had: {first.reasoning}")
     elif second.action != first.action or second.size_multiplier < first.size_multiplier:
         out.reasoning = f"{first.reasoning} | critic: {second.reasoning}"
     if out.action == "veto":

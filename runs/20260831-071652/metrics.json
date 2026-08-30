@@ -1,0 +1,15 @@
+{
+  "cycles": 1,
+  "trades": 0,
+  "capital_utilisation_pct": 0.0,
+  "mean_candidate_wait_cycles": 3.0,
+  "herfindahl_concentration": 0.0,
+  "premium_collected_net": 0.0,
+  "premium_per_capital_day": null,
+  "mean_slippage_per_contract": null,
+  "worst_slippage_per_contract": null,
+  "total_slippage_cost": 0.0,
+  "slippage_pct_of_gross_premium": null,
+  "mean_order_attempts": null,
+  "no_trade_cycles": 1
+}

@@ -74,11 +74,31 @@ class Logbook:
                       f"{row['ubt']:7.3f} {row['opbt']:6.3f} {row['pwt']:8.3f}   "
                       f"{'<-- SELECTED' if row.get('selected') else ''}")
 
-        d = r.get("decision")
-        if d:
-            print(f"\n  LLM [{d.get('provider','?')}] {d.get('action','?').upper()} "
+        first, crit, d = r.get("first_pass"), r.get("critique"), r.get("decision")
+        if first:
+            print(f"\n  LLM    [{first.get('provider','?')}] "
+                  f"{first.get('action','?').upper()} "
+                  f"x{first.get('size_multiplier', 0):.2f}")
+            print(f"    {first.get('reasoning','')[:180]}")
+        elif d:
+            print(f"\n  LLM    [{d.get('provider','?')}] {d.get('action','?').upper()} "
                   f"x{d.get('size_multiplier', 0):.2f}")
             print(f"    {d.get('reasoning','')[:200]}")
+
+        if crit:
+            # A critic that failed is not a critic that agreed. Say which,
+            # because a silent second pass looks identical to a working one
+            # that concurred, and the whole point of the pass is disagreement.
+            if crit.get("error"):
+                mark = "UNAVAILABLE"
+            elif crit.get("action") != (first or {}).get("action"):
+                mark = "OVERRODE"
+            else:
+                mark = "concurred"
+            print(f"  CRITIC [{crit.get('provider','?')}] "
+                  f"{crit.get('action','?').upper()} "
+                  f"x{crit.get('size_multiplier', 0):.2f}  ({mark})")
+            print(f"    {crit.get('reasoning','')[:180]}")
 
         f = r.get("fill")
         if f:
@@ -99,6 +119,9 @@ class Logbook:
 
         if r.get("no_trade_reason"):
             print(f"\n  NO TRADE: {r['no_trade_reason']}")
+
+        if r.get("narrative"):
+            print(f"\n  > {r['narrative']}")
 
     # ----------------------------------------------------------- metrics ---
 
