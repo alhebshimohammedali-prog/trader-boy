@@ -240,13 +240,13 @@ def coerce(obj: dict, provider: str, model: str, raw: str) -> Decision:
 
 
 async def _featherless(system: str, payload: str, json_mode: bool,
-                       max_tokens: int,
-                       temperature: float | None) -> tuple[str, str | None, str]:
+                       max_tokens: int, temperature: float | None,
+                       model_override: str | None) -> tuple[str, str | None, str]:
     """Returns (text, error, model)."""
     import httpx
 
     key = os.getenv("FEATHERLESS_API_KEY", "")
-    model = os.getenv("FEATHERLESS_MODEL", "")
+    model = model_override or os.getenv("FEATHERLESS_MODEL", "")
     base = os.getenv("FEATHERLESS_BASE_URL", "https://api.featherless.ai/v1").rstrip("/")
     if not key or not model:
         return "", "FEATHERLESS_API_KEY or FEATHERLESS_MODEL not set", model
@@ -278,15 +278,15 @@ async def _featherless(system: str, payload: str, json_mode: bool,
 
 
 async def _anthropic(system: str, payload: str, json_mode: bool,
-                     max_tokens: int,
-                     temperature: float | None) -> tuple[str, str | None, str]:
+                     max_tokens: int, temperature: float | None,
+                     model_override: str | None) -> tuple[str, str | None, str]:
     # Temperature is deliberately not forwarded here. This path drives the
     # model through `output_config.effort`, and pinning temperature alongside
     # effort-based sampling is rejected on current models. Determinism on this
     # backend comes from the json_schema output format instead, which
     # constrains decoding directly and is strictly stronger than temperature 0.
     del temperature
-    model = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
+    model = model_override or os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
     if not os.getenv("ANTHROPIC_API_KEY"):
         return "", "ANTHROPIC_API_KEY not set", model
     try:
@@ -321,16 +321,16 @@ async def _anthropic(system: str, payload: str, json_mode: bool,
 
 
 async def _ask(provider: str, system: str, payload: str, *, json_mode: bool = True,
-               max_tokens: int | None = None,
-               temperature: float | None = -1.0) -> tuple[str, str | None, str]:
+               max_tokens: int | None = None, temperature: float | None = -1.0,
+               model: str | None = None) -> tuple[str, str | None, str]:
     mt = max_tokens or config.LLM_MAX_TOKENS
     # -1.0 is the "caller did not specify" sentinel, so that an explicit
     # temperature=None (meaning "send no temperature at all") stays reachable.
     temp = config.LLM_TEMPERATURE if temperature == -1.0 else temperature
     if provider == "featherless":
-        return await _featherless(system, payload, json_mode, mt, temp)
+        return await _featherless(system, payload, json_mode, mt, temp, model)
     if provider == "anthropic":
-        return await _anthropic(system, payload, json_mode, mt, temp)
+        return await _anthropic(system, payload, json_mode, mt, temp, model)
     return "", f"unknown provider {provider!r}", ""
 
 
@@ -339,6 +339,23 @@ async def _ask(provider: str, system: str, payload: str, *, json_mode: bool = Tr
 
 def _provider(env_name: str = "LLM_PROVIDER") -> str:
     return (os.getenv(env_name) or "none").strip().lower()
+
+
+def _model(provider: str, role: str = "") -> str | None:
+    """Per-role model override, so three roles on ONE provider can still run
+    three different models.
+
+    This matters most for the critic. A model critiquing itself shares training
+    data, tokenizer and failure modes, so it mostly agrees and the second call
+    buys nothing. Pointing the critic at a different family is what makes the
+    second pass an actual second opinion rather than an echo.
+
+    Returns None to mean "use the provider's default model".
+    """
+    if not role:
+        return None
+    prefix = "ANTHROPIC" if provider == "anthropic" else "FEATHERLESS"
+    return os.getenv(f"{prefix}_{role}_MODEL") or None
 
 
 async def decide(candidate: dict) -> Decision:
@@ -406,7 +423,8 @@ async def critique(candidate: dict, first: Decision) -> Decision | None:
                                 "size_multiplier": first.size_multiplier,
                                 "reasoning": first.reasoning}},
         indent=2, default=str)
-    text, err, model = await _ask(provider, CRITIQUE_PROMPT, payload)
+    text, err, model = await _ask(provider, CRITIQUE_PROMPT, payload,
+                                  model=_model(provider, "CRITIC"))
     if err:
         return Decision("proceed", 1.0, f"critique unavailable: {err}",
                         provider, model, err)
@@ -456,10 +474,11 @@ async def narrate(summary: dict) -> str:
         provider = _provider()
     if provider == "none":
         return ""
-    text, err, _model = await _ask(
+    text, err, _m = await _ask(
         provider, NARRATE_PROMPT, json.dumps(summary, indent=2, default=str),
         json_mode=False, max_tokens=300,
-        temperature=config.LLM_NARRATE_TEMPERATURE)
+        temperature=config.LLM_NARRATE_TEMPERATURE,
+        model=_model(provider, "NARRATE"))
     if err:
         return ""
     return " ".join((text or "").split())[:400]

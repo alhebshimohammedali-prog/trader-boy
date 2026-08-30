@@ -322,7 +322,7 @@ def test_temperature():
 
     original, sent = D._featherless, []
 
-    async def stub(system, payload, json_mode, max_tokens, temperature):
+    async def stub(system, payload, json_mode, max_tokens, temperature, model_override):
         sent.append({"temp": temperature, "json_mode": json_mode})
         if len(sent) == 1:
             return "thinking out loud, no json here", None, "m"
@@ -341,7 +341,7 @@ def test_temperature():
 
         sent.clear()
 
-        async def veto(system, payload, json_mode, max_tokens, temperature):
+        async def veto(system, payload, json_mode, max_tokens, temperature, model_override):
             sent.append(temperature)
             return '{"action":"veto","size_multiplier":0,"reasoning":"bid zero"}', None, "m"
 
@@ -352,7 +352,7 @@ def test_temperature():
 
         sent.clear()
 
-        async def narr(system, payload, json_mode, max_tokens, temperature):
+        async def narr(system, payload, json_mode, max_tokens, temperature, model_override):
             sent.append({"temp": temperature, "json_mode": json_mode})
             return "Nothing traded this cycle.", None, "m"
 
