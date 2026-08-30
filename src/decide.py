@@ -178,6 +178,13 @@ class Decision:
         }
 
 
+def _flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def _closed(reason: str, provider: str = "", model: str = "", raw: str = "") -> Decision:
     return Decision("veto", 0.0, f"fail-closed: {reason}", provider, model, reason, raw)
 
@@ -261,8 +268,23 @@ async def _featherless(system: str, payload: str, json_mode: bool,
     }
     if temperature is not None:
         body["temperature"] = temperature
-    if json_mode:
+
+    # Measured against the live endpoint, not assumed. Both reasoning models we
+    # tested return HTTP 200 with an EMPTY `content` when response_format is
+    # set: the whole answer lands in a separate `reasoning` field and content
+    # never gets written. Since this layer fails closed, shipping json_object
+    # on those models vetoes every trade of the week while the log shows
+    # nothing but ordinary vetoes. Off by default; opt in per model only after
+    # tools/bench.py shows it actually returns content.
+    if json_mode and _flag("FEATHERLESS_JSON_MODE", False):
         body["response_format"] = {"type": "json_object"}
+
+    # Qwen-style models accept this and skip the chain of thought entirely,
+    # which is what we want in a seat that returns an enum. GLM ignores it and
+    # keeps reasoning, so this is opt-in rather than assumed.
+    if _flag("FEATHERLESS_DISABLE_THINKING", False):
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+
     try:
         async with httpx.AsyncClient(timeout=config.LLM_TIMEOUT_SECONDS) as http:
             r = await http.post(
@@ -272,9 +294,26 @@ async def _featherless(system: str, payload: str, json_mode: bool,
             )
             r.raise_for_status()
             data = r.json()
-        return data["choices"][0]["message"]["content"], None, model
     except Exception as exc:  # noqa: BLE001
         return "", f"featherless call failed: {type(exc).__name__}: {exc}", model
+
+    choice = (data.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
+    text = (msg.get("content") or "").strip()
+    if text:
+        return text, None, model
+
+    # Content empty. A reasoning model that talked itself out of answering
+    # still usually emitted the verdict inside its scratchpad, so look there
+    # before giving up -- parse_verdict pulls the first balanced object out.
+    thinking = (msg.get("reasoning") or msg.get("reasoning_content") or "").strip()
+    if thinking and parse_verdict(thinking) is not None:
+        return thinking, None, model
+
+    # Genuinely nothing usable. Name the actual failure: "empty content" is
+    # diagnosable from a log, "unparseable JSON" sends you hunting the parser.
+    return "", (f"empty content (finish_reason={choice.get('finish_reason')!r}, "
+                f"reasoning={len(thinking)}ch) -- model returned no answer"), model
 
 
 async def _anthropic(system: str, payload: str, json_mode: bool,
