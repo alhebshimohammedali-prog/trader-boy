@@ -1,0 +1,196 @@
+"""Layer 10: logging.
+
+Two sinks from one record:
+  - runs/<ts>/cycles.jsonl  -- the auditable trace
+  - stdout                  -- a readable table, which is what makes the demo
+                               video free (record the terminal, not a UI)
+
+Every cycle writes a record, including "no trade" ones with the reason. A log
+that only contains trades cannot show that the agent declined for good reasons,
+which is half of what "autonomy and robustness" means.
+
+The runnable-candidate table is the load-bearing part: pwt/age/ubt/opbt for
+every runnable candidate, selected AND rejected. Without it the allocation claim is
+unsupported.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import config
+
+
+class Logbook:
+    def __init__(self, run_dir: str | None = None, echo: bool = True):
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.dir = Path(run_dir or Path(config.RUNS_DIR) / stamp)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.path = self.dir / "cycles.jsonl"
+        self.echo = echo
+        self.records: list[dict] = []
+
+    # ------------------------------------------------------------- write ---
+
+    def cycle(self, record: dict) -> None:
+        record.setdefault("timestamp", datetime.now().astimezone().isoformat())
+        self.records.append(record)
+        with self.path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, default=str) + "\n")
+        if self.echo:
+            self._print(record)
+
+    def note(self, text: str) -> None:
+        if self.echo:
+            print(text)
+
+    # ------------------------------------------------------------- print ---
+
+    def _print(self, r: dict) -> None:
+        n = r.get("cycle", "?")
+        eq = r.get("equity") or 0.0
+        dd = r.get("drawdown") or 0.0
+        dep = r.get("deployed_pct") or 0.0
+        print(f"\n{'=' * 72}")
+        print(f"cycle {n}  {r.get('timestamp', '')[:19]}   "
+              f"equity ${eq:,.2f}   deployed {dep:.0%}   dd {dd:.2%}")
+
+        gated = r.get("gate_results") or []
+        if gated:
+            failed = [g for g in gated if not g.get("passed")]
+            print(f"\n  gates: {len(gated) - len(failed)}/{len(gated)} candidates runnable")
+            for g in failed[:8]:
+                print(f"    x {g.get('ticker',''):6s} {g.get('reason','')[:88]}")
+
+        table = r.get("runnable_table") or []
+        if table:
+            print(f"\n  {'ticker':7s} {'signal':>7s} {'age':>4s} {'ubt':>7s} "
+                  f"{'opbt':>6s} {'pwt':>8s}   sel")
+            for row in table:
+                print(f"  {row['ticker']:7s} {row['signal']:7.3f} {row['age']:4d} "
+                      f"{row['ubt']:7.3f} {row['opbt']:6.3f} {row['pwt']:8.3f}   "
+                      f"{'<-- SELECTED' if row.get('selected') else ''}")
+
+        d = r.get("decision")
+        if d:
+            print(f"\n  LLM [{d.get('provider','?')}] {d.get('action','?').upper()} "
+                  f"x{d.get('size_multiplier', 0):.2f}")
+            print(f"    {d.get('reasoning','')[:200]}")
+
+        f = r.get("fill")
+        if f:
+            slip = f.get("slippage")
+            slip_s = f"{slip:+.3f}" if isinstance(slip, (int, float)) else "n/a"
+            print(f"\n  ORDER {f.get('symbol','')}  status={f.get('status','?')}  "
+                  f"filled {f.get('filled_qty',0)}/{f.get('requested_qty',0)}  "
+                  f"limit {f.get('limit_price')}  fill {f.get('fill_price')}  "
+                  f"slippage {slip_s}")
+            if f.get("dropped_args"):
+                print(f"    note: server schema dropped args {f['dropped_args']}")
+
+        rec = r.get("reconciliation")
+        if rec:
+            print(f"  reconcile: {rec.get('summary','')}")
+            if rec.get("fill_check", {}).get("diverged"):
+                print(f"    !! DIVERGENCE {rec['fill_check'].get('note','')}")
+
+        if r.get("no_trade_reason"):
+            print(f"\n  NO TRADE: {r['no_trade_reason']}")
+
+    # ----------------------------------------------------------- metrics ---
+
+    def metrics(self) -> dict:
+        """The four numbers §8 asks the write-up to report. They stay
+        meaningful regardless of which way the market went."""
+        cycles = self.records or []
+        n = len(cycles)
+
+        utilisation = (
+            sum(c.get("deployed_pct") or 0.0 for c in cycles) / n if n else 0.0
+        )
+
+        waits: list[int] = []
+        for c in cycles:
+            for row in c.get("runnable_table") or []:
+                if row.get("selected"):
+                    waits.append(row.get("age", 0))
+        mean_wait = sum(waits) / len(waits) if waits else 0.0
+
+        premium = 0.0
+        capital_days = 0.0
+        by_ticker: dict[str, float] = {}
+        slippages: list[float] = []
+        slippage_cost = 0.0
+        attempts: list[int] = []
+
+        for c in cycles:
+            f = c.get("fill") or {}
+            if f.get("filled_qty"):
+                px = f.get("fill_price") or 0.0
+                qty = f.get("filled_qty") or 0
+                premium += px * 100 * qty
+
+                # Realised transaction cost, measured rather than assumed.
+                slip = f.get("slippage")
+                if isinstance(slip, (int, float)):
+                    slippages.append(slip)
+                    slippage_cost += abs(slip) * 100 * qty
+                if isinstance(f.get("attempts"), int):
+                    attempts.append(f["attempts"])
+
+                sel = next(
+                    (r for r in c.get("runnable_table") or [] if r.get("selected")), {}
+                )
+                by_ticker[sel.get("ticker", "?")] = (
+                    by_ticker.get(sel.get("ticker", "?"), 0.0) + (sel.get("collateral") or 0.0)
+                )
+                capital_days += (sel.get("collateral") or 0.0) * (c.get("dte") or 0)
+
+        total_coll = sum(by_ticker.values())
+        hhi = (
+            sum((v / total_coll) ** 2 for v in by_ticker.values()) if total_coll else 0.0
+        )
+        gross = premium + slippage_cost
+
+        return {
+            "cycles": n,
+            "trades": sum(1 for c in cycles if (c.get("fill") or {}).get("filled_qty")),
+            "capital_utilisation_pct": round(utilisation * 100, 2),
+            "mean_candidate_wait_cycles": round(mean_wait, 2),
+            "herfindahl_concentration": round(hhi, 4),
+            "premium_collected_net": round(premium, 2),
+            "premium_per_capital_day": (
+                round(premium / capital_days, 6) if capital_days else None
+            ),
+            # --- realised transaction-cost model (§8) ---------------------
+            # Not an assumption and not a parameter: this is what pricing at
+            # or through the bid actually cost us, per fill, measured against
+            # the mid we quoted from. Audits of LLM-trading studies find only
+            # 1 in 19 report an explicit cost model at all.
+            "mean_slippage_per_contract": (
+                round(sum(slippages) / len(slippages), 4) if slippages else None
+            ),
+            "worst_slippage_per_contract": round(min(slippages), 4) if slippages else None,
+            "total_slippage_cost": round(slippage_cost, 2),
+            "slippage_pct_of_gross_premium": (
+                round(100 * slippage_cost / gross, 2) if gross else None
+            ),
+            "mean_order_attempts": (
+                round(sum(attempts) / len(attempts), 2) if attempts else None
+            ),
+            "no_trade_cycles": sum(1 for c in cycles if c.get("no_trade_reason")),
+        }
+
+    def finalise(self) -> dict:
+        m = self.metrics()
+        (self.dir / "metrics.json").write_text(
+            json.dumps(m, indent=2), encoding="utf-8"
+        )
+        if self.echo:
+            print(f"\n{'=' * 72}\nrun metrics -> {self.dir / 'metrics.json'}")
+            for k, v in m.items():
+                print(f"  {k:32s} {v}")
+        return m

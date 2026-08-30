@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+state.json
+state.json.bak
+state.json.tmp
+
+# Synthetic output from tools/offline_cycle.py. Real run logs under runs/ ARE
+# the evidence for the write-up and should be committed.
+runs/offline/
+.claude/settings.local.json
+attention_weighted.egg-info/
+*.egg-info/
