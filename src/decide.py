@@ -240,7 +240,8 @@ def coerce(obj: dict, provider: str, model: str, raw: str) -> Decision:
 
 
 async def _featherless(system: str, payload: str, json_mode: bool,
-                       max_tokens: int) -> tuple[str, str | None, str]:
+                       max_tokens: int,
+                       temperature: float | None) -> tuple[str, str | None, str]:
     """Returns (text, error, model)."""
     import httpx
 
@@ -258,6 +259,8 @@ async def _featherless(system: str, payload: str, json_mode: bool,
         ],
         "max_tokens": max_tokens,
     }
+    if temperature is not None:
+        body["temperature"] = temperature
     if json_mode:
         body["response_format"] = {"type": "json_object"}
     try:
@@ -275,7 +278,14 @@ async def _featherless(system: str, payload: str, json_mode: bool,
 
 
 async def _anthropic(system: str, payload: str, json_mode: bool,
-                     max_tokens: int) -> tuple[str, str | None, str]:
+                     max_tokens: int,
+                     temperature: float | None) -> tuple[str, str | None, str]:
+    # Temperature is deliberately not forwarded here. This path drives the
+    # model through `output_config.effort`, and pinning temperature alongside
+    # effort-based sampling is rejected on current models. Determinism on this
+    # backend comes from the json_schema output format instead, which
+    # constrains decoding directly and is strictly stronger than temperature 0.
+    del temperature
     model = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
     if not os.getenv("ANTHROPIC_API_KEY"):
         return "", "ANTHROPIC_API_KEY not set", model
@@ -311,12 +321,16 @@ async def _anthropic(system: str, payload: str, json_mode: bool,
 
 
 async def _ask(provider: str, system: str, payload: str, *, json_mode: bool = True,
-               max_tokens: int | None = None) -> tuple[str, str | None, str]:
+               max_tokens: int | None = None,
+               temperature: float | None = -1.0) -> tuple[str, str | None, str]:
     mt = max_tokens or config.LLM_MAX_TOKENS
+    # -1.0 is the "caller did not specify" sentinel, so that an explicit
+    # temperature=None (meaning "send no temperature at all") stays reachable.
+    temp = config.LLM_TEMPERATURE if temperature == -1.0 else temperature
     if provider == "featherless":
-        return await _featherless(system, payload, json_mode, mt)
+        return await _featherless(system, payload, json_mode, mt, temp)
     if provider == "anthropic":
-        return await _anthropic(system, payload, json_mode, mt)
+        return await _anthropic(system, payload, json_mode, mt, temp)
     return "", f"unknown provider {provider!r}", ""
 
 
@@ -340,7 +354,22 @@ async def decide(candidate: dict) -> Decision:
     text, err, model = await _ask(provider, SYSTEM_PROMPT, payload)
     if err:
         return _closed(err, provider, model)
+
     obj = parse_verdict(text)
+    if obj is None and config.LLM_RETRY_TEMPERATURE is not None:
+        # We decode greedily, so this payload will break the same way on every
+        # cycle. Without one nudged retry, a single format quirk quietly
+        # blackballs a ticker for the rest of the week and the log shows
+        # nothing but vetoes. Retrying an unreadable ANSWER is not the same as
+        # retrying an answer we did not like -- an actual verdict, including a
+        # veto, is returned untouched below.
+        text2, err2, _m = await _ask(provider, SYSTEM_PROMPT, payload,
+                                     temperature=config.LLM_RETRY_TEMPERATURE)
+        if not err2:
+            retried = parse_verdict(text2)
+            if retried is not None:
+                obj, text = retried, text2
+
     if obj is None:
         return _closed("response was not parseable JSON", provider, model, text)
     return coerce(obj, provider, model, text)
@@ -429,7 +458,8 @@ async def narrate(summary: dict) -> str:
         return ""
     text, err, _model = await _ask(
         provider, NARRATE_PROMPT, json.dumps(summary, indent=2, default=str),
-        json_mode=False, max_tokens=300)
+        json_mode=False, max_tokens=300,
+        temperature=config.LLM_NARRATE_TEMPERATURE)
     if err:
         return ""
     return " ".join((text or "").split())[:400]

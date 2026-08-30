@@ -311,6 +311,61 @@ def test_critique():
           "an optional second opinion must not manufacture a zero-trade week")
 
 
+# --------------------------------------------------------- sampling ------
+
+def test_temperature():
+    print("\nsampling (greedy verdicts; retry a broken FORMAT, never a verdict)")
+    import asyncio
+    import os
+
+    from src import decide as D
+
+    original, sent = D._featherless, []
+
+    async def stub(system, payload, json_mode, max_tokens, temperature):
+        sent.append({"temp": temperature, "json_mode": json_mode})
+        if len(sent) == 1:
+            return "thinking out loud, no json here", None, "m"
+        return '{"action":"shrink","size_multiplier":0.5,"reasoning":"ok"}', None, "m"
+
+    os.environ["LLM_PROVIDER"] = "featherless"
+    try:
+        D._featherless = stub
+        d = asyncio.run(D.decide({"ticker": "CSCO"}))
+        check("primary call decodes greedily", sent and sent[0]["temp"] == 0.0,
+              f"got {sent[0]['temp'] if sent else None}")
+        check("unparseable response is retried once", len(sent) == 2, f"{len(sent)} calls")
+        check("retry nudges temperature off zero",
+              len(sent) > 1 and sent[1]["temp"] == config.LLM_RETRY_TEMPERATURE)
+        check("retry verdict is used", d.action == "shrink", f"got {d.action}")
+
+        sent.clear()
+
+        async def veto(system, payload, json_mode, max_tokens, temperature):
+            sent.append(temperature)
+            return '{"action":"veto","size_multiplier":0,"reasoning":"bid zero"}', None, "m"
+
+        D._featherless = veto
+        d = asyncio.run(D.decide({"ticker": "GM"}))
+        check("a veto is NEVER re-rolled", len(sent) == 1 and d.action == "veto",
+              "re-rolling until a veto turns into a proceed is answer shopping")
+
+        sent.clear()
+
+        async def narr(system, payload, json_mode, max_tokens, temperature):
+            sent.append({"temp": temperature, "json_mode": json_mode})
+            return "Nothing traded this cycle.", None, "m"
+
+        D._featherless = narr
+        asyncio.run(D.narrate({"cycle": 3}))
+        check("narrator is not greedy",
+              sent and sent[0]["temp"] == config.LLM_NARRATE_TEMPERATURE)
+        check("narrator does not request json mode", sent and sent[0]["json_mode"] is False)
+    finally:
+        D._featherless = original
+        os.environ.pop("LLM_PROVIDER", None)
+
+
 # ------------------------------------------------------------- state ------
 
 def test_state():
@@ -337,7 +392,7 @@ def test_state():
 
 def main() -> int:
     for fn in (test_occ, test_chain, test_signal, test_allocation, test_gates,
-               test_execution, test_decision, test_critique, test_state):
+               test_execution, test_decision, test_critique, test_temperature, test_state):
         fn()
     print("\n" + "=" * 60)
     if FAILURES:

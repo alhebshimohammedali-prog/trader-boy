@@ -227,6 +227,28 @@ LLM_TIMEOUT_SECONDS = 45
 # Fail CLOSED: an error, timeout, or unparseable response means NO TRADE.
 LLM_FAIL_OPEN = False
 
+# Greedy decoding on the decision path. The seat returns an enum and a scalar;
+# sampling variance there is noise we have no use for, and it makes a verdict
+# reproducible from the logged payload, which is the difference between an
+# auditable decision and an anecdote.
+LLM_TEMPERATURE = 0.0
+
+# But greedy decoding is deterministic in BOTH directions. If some payload
+# shape makes the model emit something unparseable, temperature 0 reproduces
+# that failure on every cycle, and because we fail closed the ticker is
+# silently vetoed for the rest of the week while the log just shows a veto.
+# One retry at a nudged temperature costs a second and removes that whole
+# failure class. Set to None to disable the retry entirely.
+#
+# This retries a FORMAT failure, never an unfavourable verdict. Re-rolling a
+# veto until it turns into a proceed is shopping for the answer you wanted,
+# which is the opposite of a risk check.
+LLM_RETRY_TEMPERATURE = 0.3
+
+# The narrator is prose for a human, not a verdict. Greedy decoding there
+# reads like a form letter and every cycle sounds identical.
+LLM_NARRATE_TEMPERATURE = 0.7
+
 
 # --- Logging (§8) ------------------------------------------------------------
 
