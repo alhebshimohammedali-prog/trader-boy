@@ -119,6 +119,22 @@ def evaluate(
                f"bid ${contract.bid if contract.bid is not None else 0:.2f} "
                f"< ${config.MIN_CREDIT:.2f} floor")
 
+    # A ceiling on the same number. There was a floor here and nothing above,
+    # so a corrupt quote could only ever look MORE attractive: a stale or
+    # mis-scaled bid inflates the premium, every downstream check reads it as
+    # a better trade, and the allocator prefers it precisely because it is
+    # wrong. Benchmarking the decision layer found the model waving through a
+    # 4-day 2%-OTM put quoted at 32% of strike, which is not a trade, it is
+    # bad data. The model is the last check and not the only one, so this
+    # belongs here where it is deterministic.
+    if contract.bid is not None and contract.strike > 0:
+        rich = contract.bid / contract.strike
+        if rich > config.MAX_CREDIT_PCT_STRIKE:
+            r.fail(3, "credit_sanity",
+                   f"bid ${contract.bid:.2f} is {rich:.1%} of the ${contract.strike:.2f} "
+                   f"strike, over the {config.MAX_CREDIT_PCT_STRIKE:.1%} ceiling; "
+                   "implausible for this tenor, treat as a data error")
+
     # 4 -- expiry containment. Positions expiring AFTER the mark are held to it.
     # Anything expiring on or before it settles inside the measured window.
     if contract.expiry in config.ALT_EXPIRIES:

@@ -116,8 +116,26 @@ def test_chain():
                        deployed_collateral=0.0, breaker_tripped=False,
                        held_symbols=set())
     check("unreported OI does not fail gate 3", g.passed, g.reason)
+
     check("but it is recorded as unevaluated",
           any("open interest" in n for n in g.notes), f"notes={g.notes}")
+
+    # A corrupt quote can only ever look MORE attractive, so the floor on
+    # credit needs a ceiling. Benchmarking found the LLM proceeding on this.
+    rich = contract(ticker="PEP", strike=141.0, bid=44.80, ask=45.60, delta=-0.17)
+    g = gates.evaluate(rich, now=now, equity=100_000.0, spot=144.0,
+                       deployed_collateral=0.0, breaker_tripped=False,
+                       held_symbols=set())
+    check("implausible premium is rejected deterministically", not g.passed,
+          "a mis-scaled bid must not reach the model")
+    check("and it names credit_sanity", "credit_sanity" in (g.reason or ""),
+          f"got {g.reason!r}")
+
+    normal = contract(ticker="CSCO", strike=67.0, bid=0.44, ask=0.48, delta=-0.18)
+    g = gates.evaluate(normal, now=now, equity=100_000.0, spot=68.5,
+                       deployed_collateral=0.0, breaker_tripped=False,
+                       held_symbols=set())
+    check("a real quote does NOT trip the ceiling", g.passed, g.reason)
 
 
 # ------------------------------------------------------------ signal ------

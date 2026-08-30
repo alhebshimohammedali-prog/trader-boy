@@ -149,6 +149,13 @@ MONEYNESS_TARGET = 0.021
 PER_POSITION_CAP = 0.25
 PORTFOLIO_CAP = 0.60  # total collateral / equity
 MIN_OPEN_INTEREST = 100
+# Ceiling on the bid as a fraction of strike. A 4-day put struck 1-2.5% OTM
+# should collect well under 1% of strike; anything near 5% is a stale, mis-
+# scaled, or cross-contract quote rather than a rich one. Set deliberately
+# loose -- this is a data-error tripwire, not a pricing opinion, and it should
+# never fire on a real quote in this universe.
+MAX_CREDIT_PCT_STRIKE = 0.05
+
 MAX_SPREAD_ABS = 0.05  # $ -- whichever is MORE permissive
 MAX_SPREAD_REL = 0.20  # of mid
 
