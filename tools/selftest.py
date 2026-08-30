@@ -274,6 +274,43 @@ def test_decision():
     check("shrink-to-zero fails closed", d.action == "veto")
 
 
+# ----------------------------------------------------------- critique ------
+
+def test_critique():
+    print("\nself-critique (the critic may only tighten, never loosen)")
+    from src.decide import Decision, combine
+
+    def d(action, mult, who="first"):
+        return Decision(action, mult, f"{who} says {action}", who, "m")
+
+    r = combine(d("proceed", 1.0), d("veto", 0.0, "critic"))
+    check("critic can veto an approved trade", r.action == "veto" and r.size_multiplier == 0.0)
+    check("override is recorded in the reasoning", "CRITIC OVERRODE" in r.reasoning)
+
+    r = combine(d("veto", 0.0), d("proceed", 1.0, "critic"))
+    check("critic CANNOT upgrade a veto", r.action == "veto", f"got {r.action}")
+    check("upgraded veto still sizes zero", r.size_multiplier == 0.0)
+
+    r = combine(d("proceed", 1.0), d("shrink", 0.4, "critic"))
+    check("critic can shrink", r.action == "shrink" and r.size_multiplier == 0.4)
+
+    r = combine(d("shrink", 0.3), d("proceed", 1.0, "critic"))
+    check("critic CANNOT widen a shrink", r.size_multiplier == 0.3,
+          f"got {r.size_multiplier}")
+
+    r = combine(d("shrink", 0.6), d("shrink", 0.2, "critic"))
+    check("two shrinks take the smaller", r.size_multiplier == 0.2)
+
+    base = d("proceed", 1.0)
+    check("no critic leaves the verdict alone", combine(base, None) is base)
+
+    failed = Decision("proceed", 1.0, "critique unavailable", "critic", "m",
+                      error="timeout")
+    r = combine(base, failed)
+    check("a failed critic does not block the trade", r.action == "proceed",
+          "an optional second opinion must not manufacture a zero-trade week")
+
+
 # ------------------------------------------------------------- state ------
 
 def test_state():
@@ -300,7 +337,7 @@ def test_state():
 
 def main() -> int:
     for fn in (test_occ, test_chain, test_signal, test_allocation, test_gates,
-               test_execution, test_decision, test_state):
+               test_execution, test_decision, test_critique, test_state):
         fn()
     print("\n" + "=" * 60)
     if FAILURES:

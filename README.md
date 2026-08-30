@@ -4,8 +4,8 @@ An autonomous options agent that sells cash-secured puts, and decides which
 candidate gets capital using an index policy built for allocation under
 contention.
 
-Built for the Alpaca AI Trading Agents Hackathon. Nine deterministic layers,
-plus one LLM call that can veto or shrink a trade and do nothing else.
+Built for the Alpaca AI Trading Agents Hackathon. Eight deterministic layers,
+plus two LLM passes that can veto or shrink a trade and do nothing else.
 
 Scoring window: Mon 31 Aug 09:30 ET, with equity marked at EOD Thu 3 Sep.
 
@@ -98,7 +98,7 @@ faced live, which turns the simulation into a counterfactual on real data.
 | 4 | Gates | `src/gates.py` |
 | 5 | Allocation | `src/allocation.py` |
 | 6 | LLM decision | `src/decide.py` |
-| 7 | Self-critique | not shipped |
+| 7 | Self-critique | `src/decide.py` |
 | 8 | Execution | `src/execution.py` |
 | 9 | Reconciliation | `src/reconcile.py` |
 | 10 | Logging | `src/logbook.py` |
@@ -114,6 +114,28 @@ impossible rather than merely forbidden.
 
 The LLM layer fails closed. A timeout, an HTTP error, or unparseable JSON all
 mean no trade. The agent is a complete trading system without it.
+
+### Two passes, one direction
+
+A second call sees the same candidate plus the first verdict and argues against
+it. It has veto and shrink authority and nothing else, and the two verdicts are
+merged by taking the more conservative action and the smaller multiplier. A
+critic that likes the trade cannot make it larger, and a critic that dislikes a
+veto cannot revive it.
+
+That asymmetry is what makes the second pass safe to add. It can only ever
+subtract exposure, so the worst case of a confused critic is a trade we skipped,
+never a trade we upsized. `tools/selftest.py` asserts every direction of that
+merge, including the one that matters most: the critic failing.
+
+Which is also why the critic, unlike the primary call, does *not* fail closed.
+An optional second opinion timing out would otherwise manufacture a zero-trade
+week out of a network problem. Its failure is logged and the first verdict
+stands.
+
+A third call writes one or two sentences of narration per cycle, including on
+cycles where nothing traded. It has no authority over anything and exists so the
+log reads as a decision record rather than a table dump.
 
 ### Strategy
 

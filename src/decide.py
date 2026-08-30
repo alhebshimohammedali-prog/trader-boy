@@ -92,6 +92,55 @@ Reply with ONLY a JSON object, no prose and no code fence:
 The reasoning goes into an auditable log a judge will read. State the real
 reason, not a restatement of the inputs."""
 
+CRITIQUE_PROMPT = """\
+You are the second of two independent reviewers in an autonomous
+options-trading agent. A first pass has already approved this trade. Your
+job is to argue against it.
+
+Your authority is one-way. You can veto, or shrink the size. You can never
+approve something the first pass rejected, and you can never increase size.
+If you find nothing wrong, return the first pass verdict unchanged.
+
+Do not simply agree because the first pass was confident. Do not invent a
+defect either. Look for the specific things a first pass rationalises:
+
+- A quote that is internally inconsistent with the strike or tenor
+- A spread that has widened past what the gate measured
+- Concentration building in one ticker or sector across the portfolio
+- Deployment close enough to the cap that this fill leaves no headroom
+- An entry late in the window where remaining premium no longer pays for
+  the gamma being taken on
+- Reasoning in the first pass that cites something not present in the data
+
+You are not a forecaster. Never veto because you think the underlying will
+fall. Direction is not knowable here and is not your job.
+
+An agent that vetoes everything scores zero. If the trade is merely
+unexciting rather than defective, let it stand.
+
+Reply with ONLY a JSON object, no prose and no code fence:
+{"action": "proceed"|"shrink"|"veto",
+ "size_multiplier": <float 0.0-1.0>,
+ "reasoning": "<one sentence: the specific defect, or why it stands>"}"""
+
+NARRATE_PROMPT = """\
+You write the one-line human summary at the end of an autonomous trading
+agent's cycle log. You have no authority over anything; the cycle has
+already happened.
+
+Given the cycle record, write ONE OR TWO plain sentences describing what the
+agent did and why. Write for someone reading the log later to understand the
+run, not for a trader.
+
+Rules:
+- State what actually happened, including when nothing happened. Most cycles
+  are no-trade cycles and those are the interesting ones to explain.
+- Name the binding reason. "No candidate passed all gates" is not useful;
+  "every candidate failed the spread test after the open" is.
+- Never speculate about where prices will go.
+- Never editorialise about whether the decision was good.
+- No preamble, no markdown, no bullet points. Just the sentences."""
+
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -190,24 +239,27 @@ def coerce(obj: dict, provider: str, model: str, raw: str) -> Decision:
 # --- backends ----------------------------------------------------------------
 
 
-async def _featherless(payload: str) -> Decision:
+async def _featherless(system: str, payload: str, json_mode: bool,
+                       max_tokens: int) -> tuple[str, str | None, str]:
+    """Returns (text, error, model)."""
     import httpx
 
     key = os.getenv("FEATHERLESS_API_KEY", "")
     model = os.getenv("FEATHERLESS_MODEL", "")
     base = os.getenv("FEATHERLESS_BASE_URL", "https://api.featherless.ai/v1").rstrip("/")
     if not key or not model:
-        return _closed("FEATHERLESS_API_KEY or FEATHERLESS_MODEL not set", "featherless")
+        return "", "FEATHERLESS_API_KEY or FEATHERLESS_MODEL not set", model
 
-    body = {
+    body: dict[str, Any] = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system},
             {"role": "user", "content": payload},
         ],
-        "max_tokens": config.LLM_MAX_TOKENS,
-        "response_format": {"type": "json_object"},
+        "max_tokens": max_tokens,
     }
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
     try:
         async with httpx.AsyncClient(timeout=config.LLM_TIMEOUT_SECONDS) as http:
             r = await http.post(
@@ -217,72 +269,167 @@ async def _featherless(payload: str) -> Decision:
             )
             r.raise_for_status()
             data = r.json()
-        text = data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]["content"], None, model
     except Exception as exc:  # noqa: BLE001
-        return _closed(f"featherless call failed: {type(exc).__name__}: {exc}",
-                       "featherless", model)
-
-    obj = parse_verdict(text)
-    if obj is None:
-        return _closed("response was not parseable JSON", "featherless", model, text)
-    return coerce(obj, "featherless", model, text)
+        return "", f"featherless call failed: {type(exc).__name__}: {exc}", model
 
 
-async def _anthropic(payload: str) -> Decision:
+async def _anthropic(system: str, payload: str, json_mode: bool,
+                     max_tokens: int) -> tuple[str, str | None, str]:
     model = os.getenv("ANTHROPIC_MODEL", "claude-opus-5")
     if not os.getenv("ANTHROPIC_API_KEY"):
-        return _closed("ANTHROPIC_API_KEY not set", "anthropic", model)
+        return "", "ANTHROPIC_API_KEY not set", model
     try:
         from anthropic import AsyncAnthropic
 
         client = AsyncAnthropic(timeout=config.LLM_TIMEOUT_SECONDS)
+        output_config: dict[str, Any] = {"effort": config.LLM_EFFORT}
+        if json_mode:
+            output_config["format"] = {"type": "json_schema", "schema": SCHEMA}
         resp = await client.messages.create(
             model=model,
-            max_tokens=config.LLM_MAX_TOKENS,
-            output_config={
-                "effort": config.LLM_EFFORT,
-                "format": {"type": "json_schema", "schema": SCHEMA},
-            },
+            max_tokens=max_tokens,
+            output_config=output_config,
             # Stable prefix + 1h TTL: our cycle is 15 min, so the default
             # 5-minute cache would expire between every single call.
             system=[{
                 "type": "text",
-                "text": SYSTEM_PROMPT,
+                "text": system,
                 "cache_control": {"type": "ephemeral", "ttl": "1h"},
             }],
             messages=[{"role": "user", "content": payload}],
         )
     except Exception as exc:  # noqa: BLE001
-        return _closed(f"anthropic call failed: {type(exc).__name__}: {exc}",
-                       "anthropic", model)
+        return "", f"anthropic call failed: {type(exc).__name__}: {exc}", model
 
     # Safety classifiers can decline with a 200 and empty content.
     if getattr(resp, "stop_reason", None) == "refusal":
-        return _closed("model refused the request", "anthropic", model)
+        return "", "model refused the request", model
 
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-    obj = parse_verdict(text)
-    if obj is None:
-        return _closed("response was not parseable JSON", "anthropic", model, text)
-    return coerce(obj, "anthropic", model, text)
+    return text, None, model
 
 
-# --- entry point -------------------------------------------------------------
+async def _ask(provider: str, system: str, payload: str, *, json_mode: bool = True,
+               max_tokens: int | None = None) -> tuple[str, str | None, str]:
+    mt = max_tokens or config.LLM_MAX_TOKENS
+    if provider == "featherless":
+        return await _featherless(system, payload, json_mode, mt)
+    if provider == "anthropic":
+        return await _anthropic(system, payload, json_mode, mt)
+    return "", f"unknown provider {provider!r}", ""
+
+
+# --- entry points ------------------------------------------------------------
+
+
+def _provider(env_name: str = "LLM_PROVIDER") -> str:
+    return (os.getenv(env_name) or "none").strip().lower()
 
 
 async def decide(candidate: dict) -> Decision:
-    """The whole LLM surface. One candidate in, one verdict out, no tools."""
+    """The whole primary LLM surface. One candidate in, one verdict out."""
     if not config.LLM_ENABLED:
         return Decision("proceed", 1.0, "LLM layer disabled by config", "none")
 
-    provider = os.getenv("LLM_PROVIDER", "none").strip().lower()
+    provider = _provider()
     if provider == "none":
         return Decision("proceed", 1.0, "LLM layer disabled by provider=none", "none")
 
     payload = json.dumps(candidate, indent=2, default=str)
+    text, err, model = await _ask(provider, SYSTEM_PROMPT, payload)
+    if err:
+        return _closed(err, provider, model)
+    obj = parse_verdict(text)
+    if obj is None:
+        return _closed("response was not parseable JSON", provider, model, text)
+    return coerce(obj, provider, model, text)
 
-    if provider == "featherless":
-        return await _featherless(payload)
-    if provider == "anthropic":
-        return await _anthropic(payload)
-    return _closed(f"unknown LLM_PROVIDER {provider!r}", provider)
+
+async def critique(candidate: dict, first: Decision) -> Decision | None:
+    """Second pass: argue AGAINST the trade the first pass approved.
+
+    Authority is strictly one-way. This can veto or shrink; it can never
+    upgrade a verdict or widen a position. `combine()` takes the more
+    conservative of the two, so a critic that malfunctions toward caution
+    costs a trade, and one that malfunctions toward approval changes nothing.
+
+    Unlike the primary call this does NOT fail closed. The primary verdict and
+    eight deterministic gates have already passed; blocking every trade because
+    an optional second opinion timed out would manufacture the zero-trade week
+    we spend the rest of this system avoiding. A failure is logged and skipped.
+
+    Set LLM_CRITIC_PROVIDER to a different provider than LLM_PROVIDER to get
+    genuinely uncorrelated review. Same model arguing with itself mostly
+    rationalises; a different model family actually disagrees.
+    """
+    if not config.SELF_CRITIQUE_ENABLED:
+        return None
+    provider = _provider("LLM_CRITIC_PROVIDER")
+    if provider == "none":
+        provider = _provider()
+    if provider == "none":
+        return None
+
+    payload = json.dumps(
+        {"candidate": candidate,
+         "first_pass_verdict": {"action": first.action,
+                                "size_multiplier": first.size_multiplier,
+                                "reasoning": first.reasoning}},
+        indent=2, default=str)
+    text, err, model = await _ask(provider, CRITIQUE_PROMPT, payload)
+    if err:
+        return Decision("proceed", 1.0, f"critique unavailable: {err}",
+                        provider, model, err)
+    obj = parse_verdict(text)
+    if obj is None:
+        return Decision("proceed", 1.0, "critique unparseable; first pass stands",
+                        provider, model, "unparseable", text)
+    return coerce(obj, provider, model, text)
+
+
+def combine(first: Decision, second: Decision | None) -> Decision:
+    """Take the more conservative of the two verdicts. Never the looser."""
+    if second is None or second.error:
+        return first
+    rank = {"veto": 0, "shrink": 1, "proceed": 2}
+    keep = first if rank[first.action] <= rank[second.action] else second
+    out = Decision(
+        action=keep.action,
+        size_multiplier=min(first.size_multiplier, second.size_multiplier),
+        reasoning=first.reasoning,
+        provider=first.provider,
+        model=first.model,
+        raw=first.raw,
+    )
+    if keep is second:
+        out.reasoning = f"{first.reasoning} | CRITIC OVERRODE: {second.reasoning}"
+    elif second.action != first.action or second.size_multiplier < first.size_multiplier:
+        out.reasoning = f"{first.reasoning} | critic: {second.reasoning}"
+    if out.action == "veto":
+        out.size_multiplier = 0.0
+    return out
+
+
+async def narrate(summary: dict) -> str:
+    """Two sentences on what the agent did this cycle, for the log.
+
+    No authority whatsoever: the trade is already decided and executed before
+    this runs. It exists because the per-cycle log is the artifact a judge
+    actually reads, and a bare reason string like "no candidate passed all
+    gates" does not convey that the system reasoned its way there. Runs on
+    no-trade cycles too, which are most of them.
+    """
+    if not config.NARRATE_ENABLED:
+        return ""
+    provider = _provider("LLM_NARRATOR_PROVIDER")
+    if provider == "none":
+        provider = _provider()
+    if provider == "none":
+        return ""
+    text, err, _model = await _ask(
+        provider, NARRATE_PROMPT, json.dumps(summary, indent=2, default=str),
+        json_mode=False, max_tokens=300)
+    if err:
+        return ""
+    return " ".join((text or "").split())[:400]

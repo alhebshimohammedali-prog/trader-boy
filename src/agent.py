@@ -15,7 +15,7 @@ from typing import Any
 import config
 from src import allocation, gates, signal as signal_mod
 from src.data import Contract, Data, parse_occ
-from src.decide import decide
+from src.decide import combine, critique, decide, narrate
 from src.execution import Executor
 from src.logbook import Logbook
 from src.mcp_client import AlpacaMCP
@@ -133,9 +133,9 @@ class Agent:
             record["breaker_action"] = closed
 
         if not acct.tradable:
-            return self._finish(record, "account not tradable (level/blocked/equity)")
+            return await self._finish(record, "account not tradable (level/blocked/equity)")
         if now > config.ENTRY_CUTOFF:
-            return self._finish(record, "past entry cutoff; managing only")
+            return await self._finish(record, "past entry cutoff; managing only")
 
         # 3. Signal.
         raw: dict[str, dict] = {}
@@ -163,7 +163,7 @@ class Agent:
         record["eligible"] = [s.ticker for s in eligible]
 
         if not eligible:
-            return self._finish(record, "no ticker cleared the signal floor")
+            return await self._finish(record, "no ticker cleared the signal floor")
 
         # 4. Gates -- before the model sees anything.
         held = {p.symbol for p in positions if p.is_option}
@@ -189,7 +189,7 @@ class Agent:
         record["gate_results"] = gate_rows
 
         if not runnable:
-            return self._finish(record, "no candidate passed all gates")
+            return await self._finish(record, "no candidate passed all gates")
 
         # 5. Allocation.
         winner, scored = allocation.select(runnable, self.state, acct.equity, date.today())
@@ -227,15 +227,23 @@ class Agent:
             },
         }
         verdict = await decide(candidate)
+        record["first_pass"] = verdict.row()
+
+        # Second pass argues against it. Veto/shrink only; combine() keeps
+        # whichever verdict is more conservative, never the looser one.
+        second = await critique(candidate, verdict)
+        if second is not None:
+            record["critique"] = second.row()
+            verdict = combine(verdict, second)
         record["decision"] = verdict.row()
 
         if not verdict.approved:
-            return self._finish(record, f"LLM {verdict.action}: {verdict.reasoning[:160]}")
+            return await self._finish(record, f"LLM {verdict.action}: {verdict.reasoning[:160]}")
 
         # 8. Execution.
         qty = max(1, int(config.CONTRACTS_PER_ORDER * verdict.size_multiplier))
         if not self.place_orders:
-            return self._finish(record, "dry run: order not submitted")
+            return await self._finish(record, "dry run: order not submitted")
 
         if self.state.orders_today >= config.MAX_ORDERS_PER_DAY:
             self.state.trip_breaker(
@@ -258,7 +266,7 @@ class Agent:
                 winner.contract.underlying, winner.contract.collateral,
                 acct.equity, record["dte"],
             )
-        return self._finish(record, None)
+        return await self._finish(record, None)
 
     # ------------------------------------------------------------- helpers --
 
@@ -304,6 +312,35 @@ class Agent:
             "filled": f.filled_qty,
         }
 
+    @staticmethod
+    def _summary(record: dict) -> dict:
+        """Compact view for the narrator. The full record carries big tables
+        the model does not need and would pad the prompt with."""
+        gates = record.get("gate_results") or []
+        table = record.get("runnable_table") or []
+        fill = record.get("fill") or {}
+        return {
+            "cycle": record.get("cycle"),
+            "equity": record.get("equity"),
+            "deployed_pct": record.get("deployed_pct"),
+            "drawdown": record.get("drawdown"),
+            "candidates_scored": len(record.get("signals") or []),
+            "eligible": record.get("eligible"),
+            "gate_failures": [
+                {"ticker": g.get("ticker"), "reason": g.get("reason")}
+                for g in gates if not g.get("passed")
+            ][:8],
+            "runnable_count": len(table),
+            "selected": next((r.get("ticker") for r in table if r.get("selected")), None),
+            "decision": record.get("decision"),
+            "critique": record.get("critique"),
+            "order": {"status": fill.get("status"),
+                      "filled": fill.get("filled_qty"),
+                      "price": fill.get("fill_price")} if fill else None,
+            "no_trade_reason": record.get("no_trade_reason"),
+            "breaker_tripped": bool(record.get("breaker_action")),
+        }
+
     async def flatten(self) -> dict:
         """Emergency exit: close every short option position, now.
 
@@ -331,9 +368,10 @@ class Agent:
         self.state.save()
         return {"closed": results}
 
-    def _finish(self, record: dict, no_trade: str | None) -> dict:
+    async def _finish(self, record: dict, no_trade: str | None) -> dict:
         if no_trade:
             record["no_trade_reason"] = no_trade
+        record["narrative"] = await narrate(self._summary(record))
         self.state.save()
         self.log.cycle(record)
         return record

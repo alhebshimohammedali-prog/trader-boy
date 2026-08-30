@@ -209,6 +209,18 @@ MAX_REPRICE_ATTEMPTS = 2
 # --- §5 step 6 LLM -----------------------------------------------------------
 
 LLM_ENABLED = True
+
+# Second pass argues against the trade the first pass approved. Veto/shrink
+# only -- it can never upgrade a verdict or widen a position. Set
+# LLM_CRITIC_PROVIDER to a DIFFERENT provider than LLM_PROVIDER for genuinely
+# uncorrelated review; a model arguing with itself mostly rationalises.
+SELF_CRITIQUE_ENABLED = True
+
+# One or two sentences per cycle explaining what happened, written into the
+# log. No authority at all -- the cycle is already decided and executed. It
+# exists because the per-cycle log is what a judge actually reads, and most
+# cycles are no-trade cycles that a bare reason string does not explain.
+NARRATE_ENABLED = True
 LLM_EFFORT = "medium"
 LLM_MAX_TOKENS = 4000
 LLM_TIMEOUT_SECONDS = 45
