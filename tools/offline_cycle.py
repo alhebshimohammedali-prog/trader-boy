@@ -1,35 +1,46 @@
-"""End-to-end cycle against a fake broker. No credentials, no network.
+"""End-to-end cycle against a fake broker. Orders are actually placed and
+filled, so this exercises the one path --dry cannot reach.
 
 Exercises layers 1-10 exactly as they run live: real gates, real signal, real
 PWT allocation, real executor, real reconciliation. Only the MCP transport is
-replaced. If this passes, the wiring is right and what remains to discover on
-Monday is Alpaca's actual field names and fill behaviour.
+replaced.
 
 Deliberate stressors baked into the fixture:
   - NVDA has NULL deltas          -> exercises the moneyness fallback
-  - XOM has a 40c spread          -> should be rejected by gate 3
-  - META's strike is huge         -> should be rejected by gate 2 (position cap)
-  - AVGO reports this week        -> should be rejected by gate 8 (earnings)
+  - XOM and CVX have wide spreads -> should be rejected by gate 3
+  - IBM is priced over the cap    -> should be rejected by gate 2 (position cap)
+  - DIS reports this week         -> should be rejected by gate 8 (earnings)
 
-    python tools/offline_cycle.py
+    python tools/offline_cycle.py            # no network, no credentials
+    python tools/offline_cycle.py --llm      # same, but the REAL model decides
+    python tools/offline_cycle.py --llm --cycles 5
+
+Default stays offline on purpose: it runs in the regression suite, where a
+network dependency would make a green tick meaningless. --llm is the dress
+rehearsal -- fake broker, real decisions, real fills -- which is the closest
+you can get to a live session while the market is shut.
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import os
 
 
 import config
 from src.agent import Agent
 from src.logbook import Logbook
 
+# The live universe, at roughly the levels the dry run observed. A fixture on
+# tickers the agent no longer trades rehearses nothing.
 SPOT = {
-    "AAPL": 231.0, "MSFT": 505.0, "AMZN": 228.0, "GOOGL": 205.0,
-    "META": 742.0, "TSLA": 344.0, "NVDA": 178.0, "JPM": 298.0,
-    "XOM": 114.0, "SPY": 648.0, "QQQ": 583.0, "IWM": 239.0,
+    "NVDA": 178.0, "IBM": 268.0, "CVX": 152.0, "PLTR": 158.0,
+    "XOM": 114.0, "PEP": 143.0, "CSCO": 67.5, "DIS": 114.0,
+    "INTC": 23.4, "GM": 56.2, "UBER": 74.8,
 }
 NULL_DELTA = {"NVDA"}
-WIDE_SPREAD = {"XOM"}
+WIDE_SPREAD = {"XOM", "CVX"}
 
 
 class FakeMCP:
@@ -134,16 +145,40 @@ class FakeMCP:
 
 
 async def main() -> int:
-    config.EARNINGS_EXCLUDED = set(config.EARNINGS_EXCLUDED) | {"AVGO"}
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--llm", action="store_true",
+                    help="use the real model instead of the disabled stub")
+    ap.add_argument("--cycles", type=int, default=3)
+    args = ap.parse_args()
+
+    if args.llm:
+        from dotenv import load_dotenv
+
+        load_dotenv(".env")
+        if (os.getenv("LLM_PROVIDER") or "none").lower() == "none":
+            print("--llm needs LLM_PROVIDER set in .env")
+            return 1
+        print(f"REAL model: {os.getenv('FEATHERLESS_MODEL') or os.getenv('ANTHROPIC_MODEL')}"
+              f"   critic: {os.getenv('FEATHERLESS_CRITIC_MODEL') or '(same model)'}")
+    else:
+        # Pin it off rather than inherit the ambient environment. An offline
+        # test that sometimes reaches the network is worse than one that never
+        # does, because its green tick stops meaning anything.
+        os.environ["LLM_PROVIDER"] = "none"
+        print("model layer disabled (pass --llm to exercise it)")
+
+    # Gate 8 is dormant against the live universe, so point it at a name that
+    # is actually in it. An exclusion list with no overlap tests nothing.
+    config.EARNINGS_EXCLUDED = set(config.EARNINGS_EXCLUDED) | {"DIS"}
     log = Logbook(run_dir="runs/offline", echo=True)
     agent = Agent(FakeMCP(), log, place_orders=True)
     agent.state.cycle = 0
 
-    for _ in range(3):
+    for _ in range(args.cycles):
         await agent.run_cycle()
 
     log.finalise()
-    print("\nOK: three cycles completed end to end.")
+    print(f"\nOK: {args.cycles} cycles completed end to end.")
     return 0
 
 
