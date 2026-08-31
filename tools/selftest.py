@@ -187,6 +187,105 @@ def test_allocation():
           f"got {w2.contract.underlying}")
 
 
+# ------------------------------------------------------------ reward ------
+
+def test_reward():
+    print("\nreward term (must not turn the index policy into greedy)")
+    from src.allocation import expected_yield, pwt
+
+    original = config.REWARD_LAMBDA
+    try:
+        # lambda = 0 must reproduce the original three-term index EXACTLY.
+        config.REWARD_LAMBDA = 0.0
+        st = State()
+        st.begin_cycle(datetime.now(), 100_000.0)
+        cheap = contract("GM", 55.0, bid=0.40, ask=0.44)
+        rich = contract("CSCO", 67.0, bid=1.60, ask=1.64)
+        for c in (cheap, rich):
+            st.mark_qualified(c.underlying)
+        w0, s0 = select([(cheap, 0.5), (rich, 0.5)], st, 100_000.0, date(2026, 8, 31))
+        check("lambda=0 reproduces the 3-term index",
+              all(abs(s.pwt - (s.age - s.ubt + s.opbt)) < 1e-9 for s in s0))
+        check("lambda=0 gives zero reward to everyone",
+              all(s.reward == 0.0 for s in s0))
+
+        # With lambda on, the better-paying contract should win a tie.
+        config.REWARD_LAMBDA = 0.3
+        st2 = State()
+        st2.begin_cycle(datetime.now(), 100_000.0)
+        for c in (cheap, rich):
+            st2.mark_qualified(c.underlying)
+        w1, s1 = select([(cheap, 0.5), (rich, 0.5)], st2, 100_000.0, date(2026, 8, 31))
+        by = {s.contract.underlying: s for s in s1}
+        check("higher-yielding contract scores a higher reward",
+              by["CSCO"].reward > by["GM"].reward,
+              f"CSCO {by['CSCO'].reward:.3f} vs GM {by['GM'].reward:.3f}")
+        check("reward is bounded by lambda",
+              all(s.reward <= config.REWARD_LAMBDA + 1e-9 for s in s1))
+
+        # THE property that matters. An incumbent must not hold the seat
+        # forever just because it pays best -- ubt has to reclaim it.
+        st3 = State()
+        wins: list[str] = []
+        for _ in range(25):
+            st3.begin_cycle(datetime.now(), 100_000.0)
+            for c in (cheap, rich):
+                st3.mark_qualified(c.underlying)
+            w, _ = select([(cheap, 0.5), (rich, 0.5)], st3, 100_000.0,
+                          date(2026, 8, 31))
+            wins.append(w.contract.underlying)
+            st3.charge_capital(w.contract.underlying, w.contract.collateral,
+                               100_000.0, 4)
+        streak = 1
+        longest = 1
+        for a, b in zip(wins, wins[1:]):
+            streak = streak + 1 if a == b else 1
+            longest = max(longest, streak)
+        check("the loser is not starved", len(set(wins)) == 2,
+              f"only {set(wins)} ever won across 25 cycles")
+        check("no unbounded incumbency", longest <= 8,
+              f"longest streak {longest}: reward is overpowering ubt")
+
+        # Risk adjustment: same premium, more delta, lower reward. Without
+        # this the index prefers whatever sits closest to the money.
+        near = contract("A", 100.0, bid=1.00, ask=1.04, delta=-0.30)
+        far = contract("B", 100.0, bid=1.00, ask=1.04, delta=-0.16)
+        check("higher delta yields LESS for the same premium",
+              expected_yield(near, 4) < expected_yield(far, 4),
+              "raw yield would rank maximum assignment risk highest")
+
+        # Missing delta must not be fabricated from a guessed sigma.
+        unknown = contract("C", 100.0, bid=1.00, ask=1.04, delta=None)
+        neutral = (1.00 / 100.0) * (1 - config.DELTA_TARGET) / 4
+        check("null delta falls back to the band target",
+              abs(expected_yield(unknown, 4) - neutral) < 1e-9)
+        check("no bid yields nothing rather than dividing by zero",
+              expected_yield(contract("D", 100.0, bid=None), 4) == 0.0)
+        check("reward is additive in pwt", abs(pwt(3, 0.5, 1.0, 0.3) - 3.8) < 1e-9)
+
+        # Rank spacing is lambda/(n-1), so the term is strongest in a
+        # two-horse race -- which is what a late session looks like once
+        # names get gated out. Lambda must hold rotation at n=2, the case
+        # tuning on a larger fixture silently breaks.
+        config.REWARD_LAMBDA = original
+        st4 = State()
+        st4.begin_cycle(datetime.now(), 100_000.0)
+        a = contract("NVDA", 175.0)
+        b = contract("IWM", 235.0)
+        for c in (a, b):
+            st4.mark_qualified(c.underlying)
+        w = select([(a, 0.5), (b, 0.9)], st4, 100_000.0, date(2026, 8, 31))[0]
+        st4.charge_capital(w.contract.underlying, w.contract.collateral,
+                           100_000.0, 4)
+        w2 = select([(a, 0.5), (b, 0.9)], st4, 100_000.0, date(2026, 8, 31))[0]
+        check("shipped lambda still rotates in a two-horse race",
+              w2.contract.underlying != w.contract.underlying,
+              f"{w.contract.underlying} held the seat after paying ubt; "
+              f"REWARD_LAMBDA={original} is too large for n=2")
+    finally:
+        config.REWARD_LAMBDA = original
+
+
 # ------------------------------------------------------------- gates ------
 
 def test_gates():
@@ -411,7 +510,7 @@ def test_state():
 
 
 def main() -> int:
-    for fn in (test_occ, test_chain, test_signal, test_allocation, test_gates,
+    for fn in (test_occ, test_chain, test_signal, test_allocation, test_reward, test_gates,
                test_execution, test_decision, test_critique, test_temperature, test_state):
         fn()
     print("\n" + "=" * 60)

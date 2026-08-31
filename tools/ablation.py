@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 
+import config
 from src.allocation import capital_time, dte, select
 from src.data import Contract
 from src.state import State
@@ -31,28 +32,49 @@ EQUITY = 100_000.0
 CYCLES = 40
 SEED = 20260831
 
-# (ticker, strike, base signal). Deliberately varied in BOTH signal and size so
-# a policy can trade quality against capital efficiency.
+# (ticker, strike, base signal, premium as a fraction of strike, delta).
+#
+# The last two columns exist because without them this fixture cannot measure a
+# premium-based term at all. Every contract used to carry bid=1.10 and
+# delta=-0.22, which makes yield = (bid/strike) x keep / dte a function of
+# strike alone -- perfectly collinear with what opbt already scores. Any reward
+# term would then be redundant by construction, and the ablation would report
+# "no effect" no matter how good the term was.
+#
+# Real chains disperse: a high-IV name pays several times the premium per
+# dollar of strike that a low-IV name does, and that dispersion is the whole
+# thing a reward term is supposed to exploit. Values below are roughly the
+# 4-DTE, ~18-delta levels observed live.
 UNIVERSE = [
-    ("NVDA", 178.0, 0.91),
-    ("AAPL", 226.0, 0.74),
-    ("GOOGL", 203.0, 0.68),
-    ("XOM", 112.0, 0.61),
-    ("IWM", 238.0, 0.57),
-    ("TSLA", 341.0, 0.55),
+    ("NVDA", 178.0, 0.91, 0.0061, -0.19),   # high IV, pays well
+    ("AAPL", 226.0, 0.74, 0.0034, -0.18),
+    ("GOOGL", 203.0, 0.68, 0.0040, -0.21),
+    ("XOM", 112.0, 0.61, 0.0026, -0.17),    # low IV, cheap strike, thin premium
+    ("IWM", 238.0, 0.57, 0.0022, -0.16),
+    ("TSLA", 341.0, 0.55, 0.0089, -0.26),   # richest premium, most delta
 ]
+
+# Gate 2 runs before the allocator ever sees a candidate, so arbitrating over
+# names the agent cannot hold measures a choice it never faces. TSLA at a 341
+# strike is $34,100 of collateral, 34% of equity against a 25% cap -- and it
+# also happens to carry the richest premium in the list, so leaving it in
+# flatters every policy that chases yield.
+ELIGIBLE = [u for u in UNIVERSE if u[1] * 100 <= config.PER_POSITION_CAP * EQUITY]
 
 
 def make_candidates(rng: random.Random) -> list[tuple[Contract, float]]:
     """One contract per ticker, with a little signal jitter per cycle so the
     greedy policy is not trivially frozen on one name."""
     out = []
-    for ticker, strike, base in UNIVERSE:
+    for ticker, strike, base, prem_frac, delta in ELIGIBLE:
         sig = max(0.0, min(1.0, base + rng.uniform(-0.04, 0.04)))
+        # Premium jitters with the signal, so a policy cannot get the reward
+        # ordering for free by reading the signal instead.
+        bid = round(strike * prem_frac * rng.uniform(0.92, 1.08), 2)
         c = Contract(
             symbol=f"{ticker}260904P{int(strike * 1000):08d}",
             underlying=ticker, strike=strike, expiry="2026-09-04",
-            bid=1.10, ask=1.18, open_interest=2500, delta=-0.22,
+            bid=bid, ask=round(bid + 0.04, 2), open_interest=2500, delta=delta,
         )
         out.append((c, sig))
     return out
@@ -72,7 +94,7 @@ class Outcome:
             by_ticker[t] = by_ticker.get(t, 0) + 1
         n = len(self.picks)
         hhi = sum((v / n) ** 2 for v in by_ticker.values()) if n else 0.0
-        starved = len(UNIVERSE) - len(by_ticker)
+        starved = len(ELIGIBLE) - len(by_ticker)
         total_ct = sum(self.capital_time)
 
         # Rotation latency: cycles since this ticker LAST received capital.
@@ -92,7 +114,7 @@ class Outcome:
 
         return {
             "policy": self.policy,
-            "tickers_used": f"{len(by_ticker)}/{len(UNIVERSE)}",
+            "tickers_used": f"{len(by_ticker)}/{len(ELIGIBLE)}",
             "starved": starved,
             "herfindahl": round(hhi, 4),
             "mean_revisit_gap": round(sum(gaps) / len(gaps), 2) if gaps else 0.0,
@@ -100,6 +122,9 @@ class Outcome:
             "mean_capital_time": round(total_ct / n, 4) if n else 0.0,
             "premium_per_capital_day": round(self.premium / total_ct, 4) if total_ct else 0.0,
         }
+
+
+LAMBDA = config.REWARD_LAMBDA
 
 
 def run(policy: str) -> Outcome:
@@ -117,7 +142,11 @@ def run(policy: str) -> Outcome:
         for c, _s in cands:
             state.mark_qualified(c.underlying)
 
-        if policy == "pwt":
+        if policy.startswith("pwt"):
+            # "pwt" is the three-term index, "pwt+reward" adds the yield term.
+            # Same code path, one config knob, so the comparison isolates the
+            # term rather than two separately written policies.
+            config.REWARD_LAMBDA = LAMBDA if policy == "pwt+reward" else 0.0
             winner, _scored = select(cands, state, EQUITY, TODAY)
             chosen, age = winner.contract, winner.age
         else:
@@ -197,7 +226,8 @@ def run_stream(policy: str, stream: list[list[tuple[Contract, float]]]) -> Outco
         for c, _s in cands:
             state.mark_qualified(c.underlying)
 
-        if policy == "pwt":
+        if policy.startswith("pwt"):
+            config.REWARD_LAMBDA = LAMBDA if policy == "pwt+reward" else 0.0
             winner, _ = select(cands, state, EQUITY, TODAY)
             chosen, age = winner.contract, winner.age
         else:
@@ -221,7 +251,7 @@ def run_stream(policy: str, stream: list[list[tuple[Contract, float]]]) -> Outco
 
 
 def main() -> int:
-    policies = ("pwt", "greedy", "random", "roundrobin")
+    policies = ("pwt", "pwt+reward", "greedy", "random", "roundrobin")
 
     if "--from-log" in sys.argv:
         pattern = "runs/*/cycles.jsonl"

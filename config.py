@@ -146,6 +146,48 @@ MONEYNESS_TARGET = 0.021
 # slightly conservative and we will deploy a little under the cap rather than
 # over it. That is the right direction to be wrong in, and strike * 100 is also
 # the true maximum exposure if the underlying goes to zero.
+# --- allocation reward -------------------------------------------------------
+#
+# Weight on the reward term in the PWT index. Zero reproduces the original
+# three-term policy exactly, which is what the ablation switches.
+#
+# The units are the trap. `age` is identical across every continuously runnable
+# candidate, so it cancels out of the comparison and contributes nothing --
+# rotation is actually driven by `ubt`, which accrues only on the winner. So
+# lambda must be denominated in ubt, and ubt increments are SMALL: a $2,340
+# INTC position against $100k equity for 4 days charges (2340/100000) x 4 =
+# 0.094 per win.
+#
+# That sets the scale, and it is why an intuitive-looking lambda of 2 or 5 is
+# not obviously safe: against a SINGLE rival, an incumbent holds the seat for
+# roughly lambda / capital_time consecutive wins before its own ubt overtakes
+# the reward advantage, which at lambda=2 is longer than the whole session.
+#
+# On a five-name contested set, tools/ablation.py shows premium per capital-day
+# rising monotonically with lambda and nothing starving anywhere up to 5.0:
+#
+#   lambda = 0.0  ->  90.6   (the original three-term index)
+#   lambda = 0.3  ->  91.6   +1.1%   (chosen)
+#   lambda = 1.0  ->  94.1   +3.9%
+#   lambda = 5.0  ->  99.3   +9.7%
+#
+# Which argues for a much larger lambda, and that argument is wrong. Reward is
+# scored on RANK, so with n contenders the gap between adjacent ranks is
+# lambda / (n - 1). The term is four times stronger in a two-horse race than in
+# a five-horse one. Tuning on the five-name fixture and shipping 1.0 breaks
+# rotation outright when only two candidates survive the gates -- selftest
+# catches it: the incumbent keeps the seat even after paying ubt for it.
+#
+# Two candidates is not a corner case. It is what late sessions look like once
+# spreads widen and names get gated out, which is exactly when concentration
+# hurts most. So lambda is chosen for the SMALLEST contested set, not the
+# average one, and 0.3 is the largest value that preserves rotation at n=2.
+#
+# Taking +1.1% instead of +9.7% is the deliberate trade. The larger number is
+# measured on 40 synthetic cycles; the fairness guarantee is the reason this is
+# an index policy rather than greedy with extra steps.
+REWARD_LAMBDA = 0.3
+
 PER_POSITION_CAP = 0.25
 PORTFOLIO_CAP = 0.60  # total collateral / equity
 MIN_OPEN_INTEREST = 100

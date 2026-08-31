@@ -21,7 +21,7 @@ So the allocator is an **index policy**: score every runnable candidate on one
 scalar, take the highest, recompute from scratch next cycle.
 
 ```
-pwt = age - ubt + opbt          select max(pwt)
+pwt = age - ubt + opbt + lambda*rank(yield)      select max(pwt)
 ```
 
 | term | meaning here |
@@ -29,17 +29,29 @@ pwt = age - ubt + opbt          select max(pwt)
 | `age` | cycles since this ticker first became runnable and was passed over |
 | `ubt` | collateral-days this ticker has already consumed |
 | `opbt` | committed resource-time of every **other** queued candidate |
+| `rank(yield)` | this contract's rank on `(bid/strike) x (1-abs(delta)) / dte` |
 
 Three properties fall out of that, and none of them is a rule we wrote:
 
-- **Nothing starves.** A passed-over candidate gains `age` every cycle until it
-  eventually outranks the incumbent, so the loudest signal cannot monopolise
-  capital.
+- **Nothing starves.** Winning charges `ubt`, which is subtracted, so an
+  incumbent's own success pushes it down the ranking until someone else
+  overtakes it. The loudest name cannot monopolise capital.
 - **Capital efficiency.** `opbt` excludes the candidate itself, so a name
   demanding more equity for longer scores *lower*. Cheaper, shorter commitments
   are preferred automatically.
 - **Diversification.** A ticker already holding capital carries high `ubt` and
   drops down the ranking, without any concentration limit being coded.
+
+One correction to how this is often described, including by us. Anti-starvation
+is usually attributed to `age`, and that is wrong for the common case: every
+candidate that stays continuously runnable accrues `age` at the same rate, so
+the term is identical across them and cancels out of the comparison entirely.
+Live cycles show exactly this, every runnable name sitting at the same age.
+`age` only separates candidates that became runnable at *different* times.
+Rotation in steady state is driven by `ubt`, and that distinction is what sets
+the scale for `lambda` -- `ubt` increments are around 0.09 per win, so a reward
+term denominated as though it competed with `age` would be an order of
+magnitude too strong.
 
 ### Why this is not a forced analogy
 
@@ -51,10 +63,18 @@ term, which is the standard restless-bandit-with-fairness shape.
 We claim structural fit, not optimality. A real Gittins index needs a stochastic
 reward model, and four sessions is nowhere near enough data to estimate one.
 
-Worth stating plainly: our index has a fairness term and a cost term, and no
-reward term at all. Signal gates admission but never ranks. That is deliberate,
-since the signal is too weak to rank on without inventing precision, but a
-reward-augmented index is the obvious next step.
+The reward term was added after the first version shipped without one. The
+distinction that makes it admissible is that it is *observed* rather than
+*predicted*: the bid, the strike, the delta and the days are all read off the
+contract in front of us. The signal, by contrast, is a weak opinion about the
+future, which is why it still gates admission and still never ranks. Ranking on
+it would be inventing precision; ranking on the premium a contract actually
+pays is arithmetic.
+
+The `1 - abs(delta)` factor is load-bearing rather than decorative. Raw premium
+yield ranks whatever sits closest to the money highest, every single time,
+because that is where the premium is. An index maximising it would
+systematically select maximum assignment risk and report it as efficiency.
 
 "Attention Weighted" refers to this allocation layer, not to neural attention.
 Nothing in this system is trained.
@@ -63,25 +83,71 @@ Nothing in this system is trained.
 
 ## Does it earn its place?
 
-`tools/ablation.py` runs four allocation policies over the same candidate
+`tools/ablation.py` runs five allocation policies over the same candidate
 stream. Synthetic, seeded, reproducible.
 
 | policy | tickers | starved | HHI | worst gap | capital-time | premium/capital-day |
 |---|---|---|---|---|---|---|
-| pwt | 6/6 | 0 | 0.191 | 11 | 0.772 | 142.5 |
-| greedy | 1/6 | 5 | 1.00 | 40 | 0.712 | 154.5 |
-| random | 6/6 | 0 | 0.176 | 14 | 0.878 | 125.3 |
-| roundrobin | 6/6 | 0 | 0.168 | 6 | 0.851 | 129.3 |
+| pwt | 5/5 | 0 | 0.221 | 8 | 0.709 | 90.6 |
+| pwt+reward | 5/5 | 0 | 0.221 | 8 | 0.709 | 91.6 |
+| greedy | 1/5 | 4 | 1.00 | 40 | 0.712 | 150.9 |
+| random | 5/5 | 0 | 0.214 | 16 | 0.744 | 90.6 |
+| roundrobin | 5/5 | 0 | 0.200 | 5 | 0.766 | 91.3 |
 
-Against the other diversifying policies, PWT wins clearly: 13.8% more premium
-per capital-day than random, 10.2% more than round-robin, while tying up less
-capital per trade.
+### A correction to an earlier version of this table
 
-Greedy beats it on that column. We are not hiding that. In this fixture the
-loudest name also happens to be the cheapest strike, so greedy picks up capital
-efficiency by accident. It also starves five of six tickers and goes the entire
-run without touching them, which is concentration risk this metric does not
-price.
+An earlier fixture gave every contract the same `bid` of 1.10. Premium per
+capital-day is `premium / capital-time`, so with the numerator held constant
+that column reduces to `1 / capital-time`, which is the quantity PWT minimises
+by construction. The metric was measuring the policy against itself, and the
+13.8% and 10.2% margins it produced over random and round-robin were artifacts.
+They are withdrawn.
+
+With realistic premium dispersion, and with gate 2 applied so the allocator
+only arbitrates over names the agent could actually hold, PWT does **not** beat
+round-robin on premium yield. The three of them tie at roughly 90 to 91.
+
+What PWT does buy, and what the table above supports:
+
+- **Bounded rotation latency.** Worst gap 8 against random's 16. Random
+  diversifies on average and abandons individual names for long stretches; the
+  index policy has an actual bound.
+- **Capital efficiency.** 0.709 capital-time per trade against 0.744 and 0.766.
+  It reaches the same premium while committing less equity for less time.
+- **No starvation, without a rule saying so.** Round-robin also achieves this,
+  but only because rotation is the entire policy, so it cannot respond to
+  anything else.
+
+Greedy earns 150.9, far above everything else, and we are not hiding that. It
+also starves four of five tickers and never touches them across forty cycles.
+That is concentration risk this metric does not price, and on four sessions of
+live trading it is the difference between one good week and one catastrophic
+one.
+
+### What the reward term is worth
+
+`pwt+reward` adds `lambda x rank(premium yield)` to the index, where yield is
+`(bid / strike) x (1 - |delta|) / dte`. Every input is read off the quote, so
+it is arithmetic on the contract in front of us rather than a forecast, which
+is what makes it admissible where the signal is not.
+
+At the shipped `lambda = 0.3` it is worth **+1.1%** premium per capital-day
+with no change to starvation, concentration, or worst gap. Raising lambda keeps
+buying yield: +3.9% at 1.0, +9.7% at 5.0.
+
+We ship 0.3 anyway, for a reason worth stating. Reward is scored on rank, so
+with `n` contenders the gap between adjacent ranks is `lambda / (n - 1)` -- the
+term is four times stronger in a two-horse race than in a five-horse one.
+Lambda tuned on the five-name fixture and shipped at 1.0 breaks rotation
+outright when only two candidates clear the gates: the incumbent keeps the seat
+even after paying `ubt` for it. `selftest.py` asserts against exactly this.
+
+Two contenders is not a corner case. It is what a late session looks like once
+spreads widen and names get gated out, which is when concentration hurts most.
+So lambda is chosen for the smallest contested set rather than the average one,
+and +1.1% is taken over +9.7% because the larger number is measured on forty
+synthetic cycles and the fairness guarantee is the reason this is an index
+policy rather than greedy with extra steps.
 
 `--from-log` replays the same comparison over candidate sets the agent actually
 faced live, which turns the simulation into a counterfactual on real data.
