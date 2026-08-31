@@ -197,6 +197,22 @@ def test_allocation():
     check("capital_time = collateral/equity x dte",
           abs(capital_time(small, 100_000.0, d) - (17500 / 100_000 * d)) < 1e-9)
 
+    # age must be LIVE, not a constant. first_qualified was set once and never
+    # moved, so every candidate that became runnable together carried the same
+    # age forever and the term cancelled out of every comparison.
+    # Uses its OWN state -- charging capital here would otherwise pollute the
+    # rotation check further down, which shares `st`.
+    aged = State()
+    aged.begin_cycle(datetime.now(), 100_000.0)
+    for c in (small, big):
+        aged.mark_qualified(c.underlying)
+    aged.cycle += 4
+    check("age accrues while waiting", aged.age("IWM") == 4, f"got {aged.age('IWM')}")
+    aged.charge_capital("IWM", big.collateral, 100_000.0, d)
+    check("winning resets age", aged.age("IWM") == 0,
+          "age must mean cycles since last funded, not since first seen")
+    check("the passed-over name keeps its age", aged.age("NVDA") == 4)
+
     st.charge_capital("NVDA", small.collateral, 100_000.0, d)
     check("ubt accrues after winning", st.ubt("NVDA") > 0)
     w2, _ = select([(small, 0.5), (big, 0.9)], st, 100_000.0, date(2026, 8, 31))
@@ -278,7 +294,39 @@ def test_reward():
               abs(expected_yield(unknown, 4) - neutral) < 1e-9)
         check("no bid yields nothing rather than dividing by zero",
               expected_yield(contract("D", 100.0, bid=None), 4) == 0.0)
-        check("reward is additive in pwt", abs(pwt(3, 0.5, 1.0, 0.3) - 3.8) < 1e-9)
+        w = config.AGE_WEIGHT
+        check("reward is additive in pwt",
+              abs(pwt(3, 0.5, 1.0, 0.3) - (w * 3 - 0.5 + 1.0 + 0.3)) < 1e-9)
+        check("age is weighted, not raw",
+              abs(pwt(10, 0.0, 0.0, 0.0) - w * 10) < 1e-9,
+              "unweighted age outranks eleven wins of consumed capital")
+
+        # The reward must rank the EDGE when we have it, not the premium. A
+        # live scan found the highest-yielding contract in the set was the one
+        # whose underlying realised more vol than its option priced.
+        st5 = State()
+        st5.begin_cycle(datetime.now(), 100_000.0)
+        rich_prem = contract("AAA", 100.0, bid=2.00, ask=2.04)   # pays most
+        real_edge = contract("BBB", 100.0, bid=0.50, ask=0.54)   # pays least
+        for c in (rich_prem, real_edge):
+            st5.mark_qualified(c.underlying)
+        w2, s5 = select([(rich_prem, 0.5), (real_edge, 0.5)], st5, 100_000.0,
+                        date(2026, 8, 31),
+                        edge={"AAA": -0.40, "BBB": +0.12})
+        check("reward follows VRP, not premium",
+              w2.contract.underlying == "BBB",
+              f"picked {w2.contract.underlying}: ranking the payout again")
+        by5 = {s.contract.underlying: s for s in s5}
+        check("negative-VRP name gets the lower reward",
+              by5["AAA"].reward < by5["BBB"].reward)
+
+        # Unmeasurable edge must be neutral -- never best, never worst.
+        _, s6 = select([(rich_prem, 0.5), (real_edge, 0.5)], st5, 100_000.0,
+                       date(2026, 8, 31), edge={"BBB": +0.12})
+        by6 = {s.contract.underlying: s for s in s6}
+        check("missing edge ranks neutral",
+              abs(by6["AAA"].reward - config.REWARD_LAMBDA * 0.5) < 1e-9,
+              f"got {by6['AAA'].reward}")
 
         # Rank spacing is lambda/(n-1), so the term is strongest in a
         # two-horse race -- which is what a late session looks like once

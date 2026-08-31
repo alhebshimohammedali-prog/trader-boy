@@ -21,7 +21,7 @@ So the allocator is an **index policy**: score every runnable candidate on one
 scalar, take the highest, recompute from scratch next cycle.
 
 ```
-pwt = age - ubt + opbt + lambda*rank(yield)      select max(pwt)
+pwt = w*age - ubt + opbt + lambda*rank(edge)     select max(pwt)
 ```
 
 | term | meaning here |
@@ -29,7 +29,7 @@ pwt = age - ubt + opbt + lambda*rank(yield)      select max(pwt)
 | `age` | cycles since this ticker first became runnable and was passed over |
 | `ubt` | collateral-days this ticker has already consumed |
 | `opbt` | committed resource-time of every **other** queued candidate |
-| `rank(yield)` | this contract's rank on `(bid/strike) x (1-abs(delta)) / dte` |
+| `rank(edge)` | this ticker's rank on **variance risk premium**: implied vol minus realised |
 
 Three properties fall out of that, and none of them is a rule we wrote:
 
@@ -42,16 +42,21 @@ Three properties fall out of that, and none of them is a rule we wrote:
 - **Diversification.** A ticker already holding capital carries high `ubt` and
   drops down the ranking, without any concentration limit being coded.
 
-One correction to how this is often described, including by us. Anti-starvation
-is usually attributed to `age`, and that is wrong for the common case: every
-candidate that stays continuously runnable accrues `age` at the same rate, so
-the term is identical across them and cancels out of the comparison entirely.
-Live cycles show exactly this, every runnable name sitting at the same age.
-`age` only separates candidates that became runnable at *different* times.
-Rotation in steady state is driven by `ubt`, and that distinction is what sets
-the scale for `lambda` -- `ubt` increments are around 0.09 per win, so a reward
-term denominated as though it competed with `age` would be an order of
-magnitude too strong.
+`age` had to be repaired to make the first of those true. It was originally
+"cycles since this ticker first became runnable", set once and never moved --
+so every candidate that qualified together carried an identical age forever,
+the term cancelled out of every comparison, and all the anti-starvation was
+actually coming from `ubt`. Live cycles showed it plainly: every runnable name
+sitting at the same number. It now resets when a ticker receives capital, so it
+means "cycles since last funded", which is the classic aging term and the thing
+this index was documented as having all along.
+
+That repair needs a weight, because the terms are not in the same units. `age`
+counts cycles; `ubt` and `opbt` are equity-fraction-days, and a typical win
+charges about 0.09 of `ubt`. Unweighted, one cycle of waiting would outrank
+eleven wins' worth of consumed capital -- not an index policy, just round-robin
+with extra arithmetic. `AGE_WEIGHT = 0.1` makes one cycle of waiting worth
+roughly one win's worth of capital, by construction rather than by fitting.
 
 ### Why this is not a forced analogy
 

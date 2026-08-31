@@ -272,6 +272,31 @@ MONEYNESS_TARGET = 0.021
 # Taking +1.1% instead of +9.7% is the deliberate trade. The larger number is
 # measured on 40 synthetic cycles; the fairness guarantee is the reason this is
 # an index policy rather than greedy with extra steps.
+# Weight on the age term. The terms are not in the same units: age counts
+# CYCLES, while ubt and opbt are equity-fraction-days and a typical win charges
+# about 0.09 of ubt. At weight 1.0 a single cycle of waiting outranks eleven
+# wins' worth of consumed capital, which collapses the index into round-robin.
+#
+# Set so that ONE CYCLE OF WAITING is worth roughly ONE WIN'S WORTH of consumed
+# capital. A typical position charges (collateral/equity) x dte ~= 0.09 of ubt,
+# so 0.1 makes the fairness credit and the usage debit commensurate by
+# construction rather than by fitting.
+#
+# Swept for confirmation, and the honest result is that it barely matters --
+# ubt already does most of the rotating:
+#
+#   weight   HHI     worst gap   premium/capital-day
+#   0.00     0.2212      8           91.57
+#   0.10     0.2212      7           91.74   (chosen)
+#   0.25     0.2137      7           91.92
+#   1.00     0.2037      6           91.90
+#
+# Higher weights diversify slightly better, and that is the argument against
+# them: at 1.0 the HHI reaches 0.204 against round-robin's 0.200, which is the
+# index policy dissolving into rotation. Marginal yield is not worth losing the
+# thing that makes it a policy rather than a schedule.
+AGE_WEIGHT = 0.1
+
 REWARD_LAMBDA = 0.3
 
 PER_POSITION_CAP = 0.25

@@ -122,6 +122,19 @@ class State:
             return
         self.capital_days_used[ticker] = self.ubt(ticker) + (collateral / equity) * dte
 
+        # Winning resets the clock, which is what makes `age` mean anything.
+        #
+        # first_qualified was set once and never moved, so every candidate that
+        # became runnable on the same cycle carried an IDENTICAL age forever --
+        # the term cancelled out of every comparison and contributed nothing.
+        # Live cycles showed exactly that, every runnable name sitting at the
+        # same number. All the anti-starvation was coming from ubt alone.
+        #
+        # Reset on funding and `age` becomes "cycles since this ticker last
+        # received capital", which is the classic aging term and the thing the
+        # index was documented as having all along.
+        self.first_qualified[ticker] = self.cycle
+
     # --------------------------------------------------------- breaker ------
 
     def drawdown(self, equity: float) -> float:

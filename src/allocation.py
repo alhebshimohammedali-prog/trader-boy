@@ -109,7 +109,7 @@ def expected_yield(contract: Contract, days_to_expiry: int) -> float:
 
 
 def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0) -> float:
-    """pwt = age - ubt + opbt + reward.
+    """pwt = w*age - ubt + opbt + reward.
 
     age     cycles since this ticker first became runnable and was passed over
     ubt     collateral-days this ticker has already consumed
@@ -138,7 +138,12 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0) -> float:
        and no further -- worth exactly lambda, the same as a quote one cent
        better than second place.
     """
-    return age - ubt + opbt + reward
+    # age is weighted because the terms are not in the same units. age counts
+    # CYCLES; ubt and opbt are equity-fraction-days, and a typical win charges
+    # about 0.09 of ubt. Unweighted, a single cycle of waiting outranks eleven
+    # wins' worth of capital consumed, which is not an index policy, it is
+    # round-robin with extra arithmetic.
+    return config.AGE_WEIGHT * age - ubt + opbt + reward
 
 
 def select(
@@ -146,6 +151,7 @@ def select(
     state: State,
     equity: float,
     today,
+    edge: dict[str, float] | None = None,
 ) -> tuple[Scored | None, list[Scored]]:
     """Score every runnable candidate, pick one.
 
@@ -165,13 +171,26 @@ def select(
     }
     queued_total = sum(own.values())
 
-    # Reward is scored on RANK within this cycle's runnable set, not on the raw
-    # yield. Ranking is what bounds the term (see pwt), and it also makes the
-    # index scale-free: the allocator asks "is this the best-paying contract
-    # available right now", which is answerable, instead of "is 1.2% per
-    # capital-day good", which needs a reference distribution we do not have.
-    yields = {id(c): expected_yield(c, d) for c, _s, d in entries}
-    pool = list(yields.values())
+    # What the reward term measures.
+    #
+    # `edge` is the variance risk premium per ticker: implied vol minus what
+    # the underlying is actually realising. That is the strategy's claimed
+    # source of return, and it is the right thing to allocate toward. Premium
+    # yield is NOT a substitute: measured live, the highest-yielding contract
+    # in the runnable set was routinely the one whose underlying was moving
+    # more than its option price assumed -- CIFR paid the most at an implied
+    # 1.06 against realised 1.20, and PLTR was realising double its implied.
+    # Ranking on yield finds the names where selling volatility is underpriced,
+    # which is the opposite of the edge.
+    #
+    # Yield remains the fallback when vol is unmeasurable, because between two
+    # contracts of unknown edge the one paying more per capital-day is still
+    # the better use of the capital.
+    if edge:
+        vals = {id(c): edge.get(c.underlying) for c, _s, _d in entries}
+    else:
+        vals = {id(c): expected_yield(c, d) for c, _s, d in entries}
+    pool = [v for v in vals.values() if v is not None]
 
     scored: list[Scored] = []
     for contract, signal, d in entries:
@@ -180,10 +199,16 @@ def select(
         ubt = state.ubt(ticker)
         # OTHER candidates' resource-time -- excludes this one by design.
         opbt = queued_total - own[id(contract)]
-        y = yields[id(contract)]
-        reward = config.REWARD_LAMBDA * rank_within(y, pool)
+        y = vals[id(contract)]
+        # A candidate we could not measure ranks NEUTRAL, never best or worst.
+        # Missing data is not evidence in either direction, and the same
+        # convention already governs a null delta and an unreported open
+        # interest elsewhere in this system.
+        r = rank_within(y, pool) if (y is not None and pool) else 0.5
+        reward = config.REWARD_LAMBDA * r
         scored.append(Scored(contract, signal, age, ubt, opbt,
-                             pwt(age, ubt, opbt, reward), y, reward))
+                             pwt(age, ubt, opbt, reward),
+                             y if y is not None else 0.0, reward))
 
     winner = max(
         scored,

@@ -201,7 +201,14 @@ class Agent:
             return await self._finish(record, "no candidate passed all gates")
 
         # 5. Allocation.
-        winner, scored = allocation.select(runnable, self.state, acct.equity, date.today())
+        # Variance risk premium per ticker, from the signal layer's own
+        # measurements. This is what the allocator's reward term ranks on.
+        edge = {s.ticker: s.iv - s.realized_vol
+                for s in signals
+                if s.iv is not None and s.realized_vol is not None}
+
+        winner, scored = allocation.select(runnable, self.state, acct.equity,
+                                           date.today(), edge=edge)
         record["runnable_table"] = [s.row() for s in scored]
         record["dte"] = allocation.dte(winner.contract, date.today())
 
