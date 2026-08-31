@@ -236,6 +236,32 @@ python run.py --once --dry            # one live cycle, no order sent
 python run.py                         # the loop
 python run.py --comp                  # the competition account
 python run.py --flatten               # emergency: close all shorts and stop
+
+powershell -ExecutionPolicy Bypass -File keepalive.ps1 -Comp   # supervised
+```
+
+`run.py` on its own already spans the whole window: it sleeps through closed
+hours, wakes at the open, and stops itself at the Thursday mark. A bad cycle is
+caught and logged rather than ending the run.
+
+`keepalive.ps1` covers what that cannot. The MCP connection is opened outside
+the cycle loop, so if `alpaca-mcp-server` dies the agent keeps logging "cycle
+raised" every tick without ever reconnecting -- a zombie that looks alive in
+the log. Only a process restart clears it, and the supervisor also survives a
+dropped network, an exception escaping `asyncio.run`, and an overnight Windows
+reboot. It backs off exponentially so a config error cannot spin for four days,
+and stops at the mark rather than restarting into a market that cannot score.
+
+Restarting is safe by construction: state is written atomically with a `.bak`,
+and each order carries a deterministic `client_order_id` the executor checks
+before placing anything, so a restart mid-order adopts the existing order
+rather than duplicating it. `tools/scenarios.py` covers that path.
+
+Disable sleep before a live run, or the OS suspends the process regardless:
+
+```
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
 ```
 
 `--comp` is the only thing standing between the dev account and the scored one.
