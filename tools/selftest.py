@@ -137,6 +137,42 @@ def test_chain():
                        held_symbols=set())
     check("a real quote does NOT trip the ceiling", g.passed, g.reason)
 
+    # History gate: what the stock actually did, against what delta claims.
+    ok = gates.evaluate(normal, now=now, equity=100_000.0, spot=68.5,
+                        deployed_collateral=0.0, breaker_tripped=False,
+                        held_symbols=set(), empirical_itm=(0.24, 86))
+    check("ordinary assignment history passes", ok.passed, ok.reason)
+
+    bad = gates.evaluate(normal, now=now, equity=100_000.0, spot=68.5,
+                         deployed_collateral=0.0, breaker_tripped=False,
+                         held_symbols=set(), empirical_itm=(0.55, 86))
+    check("history above the ceiling is rejected",
+          not bad.passed and "assignment_history" in (bad.reason or ""),
+          f"got {bad.reason!r}")
+
+    thin = gates.evaluate(normal, now=now, equity=100_000.0, spot=68.5,
+                          deployed_collateral=0.0, breaker_tripped=False,
+                          held_symbols=set(), empirical_itm=(0.90, 5))
+    check("too few windows does not reject", thin.passed,
+          "a rate from five samples is noise, not evidence")
+    check("but it is recorded as unevaluated",
+          any("history" in n for n in thin.notes), f"notes={thin.notes}")
+
+    none_ = gates.evaluate(normal, now=now, equity=100_000.0, spot=68.5,
+                           deployed_collateral=0.0, breaker_tripped=False,
+                           held_symbols=set(), empirical_itm=None)
+    check("unmeasured history is skipped entirely", none_.passed)
+
+    # The estimator itself.
+    from src.signal import empirical_itm_rate
+    flat = [{"c": 100.0} for _ in range(60)]
+    r = empirical_itm_rate(flat, 0.02, 4)
+    check("a flat series never finishes ITM", r and r[0] == 0.0)
+    crash = [{"c": 100.0 - i} for i in range(60)]
+    r2 = empirical_itm_rate(crash, 0.02, 4)
+    check("a falling series always does", r2 and r2[0] > 0.9, f"got {r2}")
+    check("too little data returns None", empirical_itm_rate(flat[:3], 0.02, 4) is None)
+
     # The moneyness fallback exists for MISSING delta, not unwelcome delta. A
     # live scan found AAL quoting deltas on every strike, none in band, and the
     # fallback returning a 0.40-delta put -- twice the assignment risk the band

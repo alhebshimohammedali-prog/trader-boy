@@ -1,0 +1,54 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+universe (11): NVDA, IBM, CVX, PLTR, XOM, PEP, CSCO, DIS, INTC, GM, UBER
+
+========================================================================
+cycle 1  2026-08-31T16:48:03 ET   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 3/6 candidates runnable
+    x GM     g3 liquidity: spread $0.10 / 27% fails both tests
+    x CVX    g3 liquidity: spread $0.24 / 26% fails both tests; g4 expiry_containment: already ITM (s
+    x UBER   g3 liquidity: spread $0.08 / 28% fails both tests
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  INTC      0.678    0   0.000  1.177  0.25  +0.00    1.427   <-- SELECTED
+  PLTR      0.632    0   0.000  0.900  0.05  +0.00    0.950   
+  NVDA      0.450    0   0.000  0.787  0.15  +0.00    0.938   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is a standard cash-secured put with 3 DTE, 19.5% delta, and a reasonable premium relative to the strike. The portfolio is currently empty, so there is no concentratio
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is a standard cash-secured put with 3 DTE, 19.5% delta, and no portfolio concentration or cap pressure, as the portfolio is currently empty.
+  reconcile: no position change
+
+  NO TRADE: dry run: order not submitted
+
+  > The agent selected INTC as the only candidate that passed all liquidity and expiry gates, rejecting GM, CVX, and UBER due to wide spreads and an already in-the-money strike. No order was submitted because the cycle was a dry run.
+
+========================================================================
+run metrics -> runs\20260831-164634\metrics.json
+  cycles                           1
+  trades                           0
+  capital_utilisation_pct          0.0
+  mean_candidate_wait_cycles       0.0
+  herfindahl_concentration         0.0
+  premium_collected_net            0.0
+  premium_per_capital_day          None
+  mean_slippage_per_contract       None
+  worst_slippage_per_contract      None
+  total_slippage_cost              0.0
+  slippage_pct_of_gross_premium    None
+  mean_order_attempts              None
+  no_trade_cycles                  1

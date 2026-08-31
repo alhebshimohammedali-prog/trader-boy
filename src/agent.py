@@ -185,10 +185,24 @@ class Agent:
                 gate_rows.append({"ticker": s.ticker, "passed": False, "reason": how})
                 continue
             await self.data.refresh_quotes([contract])
+
+            # What this underlying has actually done at this distance, over
+            # this holding period. Reuses the bars the signal layer already
+            # fetched, so it costs no extra call. None when spot is unknown or
+            # the strike is not OTM -- an ITM strike is gate 4's business, and
+            # a negative moneyness would make the rate meaningless.
+            hist = None
+            if spot and spot > 0 and contract.strike < spot:
+                bars = (raw.get(s.ticker) or {}).get("bars") or []
+                hist = signal_mod.empirical_itm_rate(
+                    bars, (spot - contract.strike) / spot,
+                    max(allocation.dte(contract, date.today()), 1))
+
             g = gates.evaluate(
                 contract, now=now, equity=acct.equity, spot=spot,
                 deployed_collateral=deployed,
                 breaker_tripped=self.state.breaker_tripped, held_symbols=held,
+                empirical_itm=hist,
             )
             gate_rows.append({"ticker": s.ticker, "symbol": contract.symbol,
                               "passed": g.passed, "reason": g.reason, "strike_via": how})

@@ -71,6 +71,11 @@ def evaluate(
     deployed_collateral: float,
     breaker_tripped: bool,
     held_symbols: set[str],
+    # (rate, samples) from signal.empirical_itm_rate. Optional so the gate
+    # stays pure and every caller that cannot measure history -- the offline
+    # fixtures, the scan before bars are fetched -- simply skips the check
+    # rather than fabricating a number for it.
+    empirical_itm: tuple[float, int] | None = None,
 ) -> GateResult:
     r = GateResult(passed=True)
     collateral = contract.collateral
@@ -134,6 +139,33 @@ def evaluate(
                    f"bid ${contract.bid:.2f} is {rich:.1%} of the ${contract.strike:.2f} "
                    f"strike, over the {config.MAX_CREDIT_PCT_STRIKE:.1%} ceiling; "
                    "implausible for this tenor, treat as a data error")
+
+    # 3b -- what this underlying has ACTUALLY done, against what the chain
+    # says it will do. delta is a risk-neutral probability of finishing ITM;
+    # empirical_itm counts how often the stock genuinely finished that far
+    # down over this holding period. When the second badly exceeds the first,
+    # the option is underpricing the move that hurts a short put.
+    #
+    # The ceiling is derived, not tuned: DELTA_MAX is the most assignment risk
+    # this strategy agreed to take, so a measured rate above it means the
+    # contract is not the risk we intended, whatever its quoted delta. The
+    # margin on top is for the estimator, which is coarse -- windows overlap,
+    # so ninety bars give roughly twenty independent observations and a
+    # standard error near ten points.
+    if empirical_itm is not None:
+        rate, samples = empirical_itm
+        if samples < config.MIN_ITM_SAMPLES:
+            r.notes.append(
+                f"g3b history: only {samples} windows, not evaluated")
+        elif rate > config.MAX_EMPIRICAL_ITM:
+            r.fail(3, "assignment_history",
+                   f"finished ITM in {rate:.0%} of {samples} past "
+                   f"{config.RV_LOOKBACK_DAYS}-day windows at this distance, "
+                   f"over the {config.MAX_EMPIRICAL_ITM:.0%} ceiling "
+                   f"(quoted delta {abs(contract.delta):.2f})"
+                   if contract.delta is not None else
+                   f"finished ITM in {rate:.0%} of {samples} past windows, "
+                   f"over the {config.MAX_EMPIRICAL_ITM:.0%} ceiling")
 
     # 4 -- expiry containment. Positions expiring AFTER the mark are held to it.
     # Anything expiring on or before it settles inside the measured window.

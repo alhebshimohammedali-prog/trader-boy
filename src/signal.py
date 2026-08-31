@@ -104,6 +104,37 @@ def correlation(a: list[float], b: list[float]) -> float | None:
     return sxy / math.sqrt(sxx * syy)
 
 
+def empirical_itm_rate(bars: list[dict], moneyness: float,
+                       horizon: int) -> tuple[float, int] | None:
+    """How often this underlying actually finished below a strike this far
+    out, over a holding period this long. Returns (rate, samples).
+
+    An empirical assignment probability, measured from the tape, to set
+    against the risk-neutral one the chain reports as delta. They answer the
+    same question by different routes: delta prices what the market believes,
+    this counts what the stock has done. When the second is much larger than
+    the first, the option is underpricing the move that hurts us.
+
+    Windows overlap, so the samples are autocorrelated and the effective count
+    is far below the nominal one -- roughly len/horizon independent
+    observations. Treat the number as a coarse check, never a precise
+    probability, and see MIN_ITM_SAMPLES.
+    """
+    px = closes(bars)
+    if len(px) < horizon + 2:
+        return None
+    hits = 0
+    n = 0
+    for i in range(len(px) - horizon):
+        start, end = px[i], px[i + horizon]
+        if start <= 0:
+            continue
+        n += 1
+        if end < start * (1.0 - moneyness):
+            hits += 1
+    return (hits / n, n) if n else None
+
+
 def realized_vol(bars: list[dict], lookback: int | None = None) -> float | None:
     """Annualised stdev of daily log returns."""
     px = closes(bars)

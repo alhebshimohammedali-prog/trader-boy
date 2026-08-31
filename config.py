@@ -360,6 +360,25 @@ PER_POSITION_CAP = 0.25
 # genuinely uncommon in four days.
 PORTFOLIO_CAP = 0.85
 MIN_OPEN_INTEREST = 100
+
+# Ceiling on the EMPIRICAL assignment rate: how often this underlying actually
+# finished below a strike this far out, over this holding period, measured from
+# daily bars. Set against the delta the chain quotes, which is the same
+# probability priced risk-neutrally.
+#
+# Derived rather than tuned. DELTA_MAX is the most assignment risk this
+# strategy agreed to take, so a measured rate above it means the contract is
+# not the risk we intended, whatever its quoted delta says. The margin on top
+# is for the estimator: windows overlap, so ninety bars give roughly twenty
+# independent observations and a standard error near ten points, and rejecting
+# on noise would cost more trades than it saves.
+#
+# Measured live across the universe, most names sit 1.0-1.4x their delta --
+# empirical slightly above risk-neutral is normal, since real distributions
+# have fatter left tails than the pricing model. NVDA stood out at 0.407
+# against a 0.228 delta, a 1.8%-OTM strike on a name that moves.
+MAX_EMPIRICAL_ITM = 0.40      # = DELTA_MAX + 0.10
+MIN_ITM_SAMPLES = 40          # below this the rate is noise with a decimal point
 # Ceiling on the bid as a fraction of strike. A 4-day put struck 1-2.5% OTM
 # should collect well under 1% of strike; anything near 5% is a stale, mis-
 # scaled, or cross-contract quote rather than a rich one. Set deliberately
