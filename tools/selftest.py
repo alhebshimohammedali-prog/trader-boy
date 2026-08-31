@@ -160,6 +160,27 @@ def test_chain():
 def test_signal():
     print("\nsignal ranking (ties at the floor = zero trades all week)")
     check("all-tied pool ranks mid", sig.rank_within(0.24, [0.24] * 6) == 0.5)
+
+    # Correlation: None when unmeasurable, never a fabricated 0.0.
+    import random
+    random.seed(7)
+    walk = [100.0]
+    for _ in range(40):
+        walk.append(walk[-1] * (1 + random.gauss(0, 0.02)))
+    other = [100.0]
+    for _ in range(40):
+        other.append(other[-1] * (1 + random.gauss(0, 0.02)))
+    bars_of = lambda xs: [{"c": v} for v in xs]
+    ra = sig.log_returns(bars_of(walk))
+    rb = sig.log_returns(bars_of(other))
+    rinv = sig.log_returns(bars_of([200.0 - p for p in walk]))
+    check("identical series correlate at 1", sig.correlation(ra, ra) > 0.99)
+    check("inverse series correlate at -1", sig.correlation(ra, rinv) < -0.99)
+    check("independent series correlate near 0", abs(sig.correlation(ra, rb)) < 0.4)
+    check("too few samples returns None, not 0.0",
+          sig.correlation(ra[:5], rb[:5]) is None,
+          "0.0 asserts independence; None admits ignorance")
+    check("a flat series returns None", sig.correlation([0.0] * 20, [0.0] * 20) is None)
     check("highest of pool ranks high", sig.rank_within(0.30, [0.10, 0.20, 0.30]) > 0.6)
     check("lowest of pool ranks low", sig.rank_within(0.10, [0.10, 0.20, 0.30]) < 0.4)
     check("empty pool is neutral", sig.percentile_of(0.2, []) == 0.5)
@@ -319,6 +340,40 @@ def test_reward():
         by5 = {s.contract.underlying: s for s in s5}
         check("negative-VRP name gets the lower reward",
               by5["AAA"].reward < by5["BBB"].reward)
+
+        # Crowding: ubt stops us doubling into one TICKER and nothing more, so
+        # four semiconductor names read as diversification while being one bet.
+        st7 = State()
+        st7.begin_cycle(datetime.now(), 100_000.0)
+        twin = contract("TWIN", 100.0, bid=1.00, ask=1.04)
+        indep = contract("INDY", 100.0, bid=1.00, ask=1.04)
+        for c in (twin, indep):
+            st7.mark_qualified(c.underlying)
+        w7, s7 = select([(twin, 0.5), (indep, 0.5)], st7, 100_000.0,
+                        date(2026, 8, 31),
+                        crowd={"TWIN": 0.95, "INDY": 0.05})
+        check("a name correlated with the book loses to one that is not",
+              w7.contract.underlying == "INDY", f"picked {w7.contract.underlying}")
+        by7 = {s.contract.underlying: s for s in s7}
+        check("crowding scales with correlation",
+              by7["TWIN"].crowding > by7["INDY"].crowding)
+        check("crowding is bounded by mu",
+              by7["TWIN"].crowding <= config.CROWDING_MU + 1e-9)
+
+        # A hedge is not a crime. Negative correlation must not be rewarded
+        # OR punished -- it clamps to zero.
+        _, s8 = select([(twin, 0.5), (indep, 0.5)], st7, 100_000.0,
+                       date(2026, 8, 31), crowd={"TWIN": -0.8, "INDY": 0.0})
+        by8 = {s.contract.underlying: s for s in s8}
+        check("negative correlation is not penalised", by8["TWIN"].crowding == 0.0)
+
+        # Unmeasured correlation must not be read as "uncorrelated".
+        _, s9 = select([(twin, 0.5), (indep, 0.5)], st7, 100_000.0,
+                       date(2026, 8, 31), crowd={"INDY": 0.9})
+        by9 = {s.contract.underlying: s for s in s9}
+        check("unmeasured pair carries no crowding penalty",
+              by9["TWIN"].crowding == 0.0)
+        check("but a measured one does", by9["INDY"].crowding > 0.0)
 
         # Unmeasurable edge must be neutral -- never best, never worst.
         _, s6 = select([(rich_prem, 0.5), (real_edge, 0.5)], st5, 100_000.0,

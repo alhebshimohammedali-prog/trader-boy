@@ -297,6 +297,21 @@ MONEYNESS_TARGET = 0.021
 # thing that makes it a policy rather than a schedule.
 AGE_WEIGHT = 0.1
 
+# Penalty on correlation with what the book already holds.
+#
+# ubt stops the allocator doubling into one TICKER and does nothing else, so a
+# book of NVDA, MRVL, SMCI and DRAM reads as four-way diversification while
+# being one semiconductor bet in four wrappers. Herfindahl would report a
+# healthy 0.25 right up to the morning the sector gaps and every leg goes ITM
+# together -- which is the only scenario that actually ends a short-put book in
+# four sessions.
+#
+# Same scale as REWARD_LAMBDA deliberately: a candidate perfectly correlated
+# with a holding forfeits its entire edge advantage, and one at 0.5 forfeits
+# half. Correlation below zero is treated as zero, since being negatively
+# correlated with a holding is a hedge, not a reason to pay extra.
+CROWDING_MU = 0.3
+
 REWARD_LAMBDA = 0.3
 
 PER_POSITION_CAP = 0.25

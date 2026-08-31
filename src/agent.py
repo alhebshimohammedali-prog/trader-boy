@@ -207,8 +207,30 @@ class Agent:
                 for s in signals
                 if s.iv is not None and s.realized_vol is not None}
 
+        # Correlation of each candidate against the underlyings already held.
+        # Uses the same bars the signal layer fetched this cycle, so this costs
+        # no extra calls. Held names whose bars we do not have contribute
+        # nothing rather than a assumed zero.
+        held_roots = {parse_occ(p.symbol).root for p in positions
+                      if p.is_option and parse_occ(p.symbol)}
+        crowd: dict[str, float] = {}
+        if held_roots:
+            rets = {t: signal_mod.log_returns(v.get("bars") or [])
+                    for t, v in raw.items()}
+            for cand in rets:
+                if cand in held_roots:
+                    continue
+                cs = [signal_mod.correlation(rets[cand], rets[h])
+                      for h in held_roots if h in rets]
+                cs = [c for c in cs if c is not None]
+                if cs:
+                    # Worst case, not average: the risk that matters is the
+                    # single holding this would move with, and averaging that
+                    # against uncorrelated names hides it.
+                    crowd[cand] = max(cs)
+
         winner, scored = allocation.select(runnable, self.state, acct.equity,
-                                           date.today(), edge=edge)
+                                           date.today(), edge=edge, crowd=crowd)
         record["runnable_table"] = [s.row() for s in scored]
         record["dte"] = allocation.dte(winner.contract, date.today())
 

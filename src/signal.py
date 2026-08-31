@@ -56,6 +56,11 @@ class Signal:
 
 MIN_IV_HISTORY = 8  # observations before a time-series percentile means anything
 
+# A correlation from a handful of daily returns is noise with a decimal point.
+# Below this we report None and the allocator treats the pair as unmeasured
+# rather than uncorrelated, which are very different claims.
+MIN_CORR_SAMPLES = 15
+
 
 def closes(bars: list[dict]) -> list[float]:
     out = []
@@ -68,6 +73,35 @@ def closes(bars: list[dict]) -> list[float]:
                     pass
                 break
     return out
+
+
+def log_returns(bars: list[dict], lookback: int | None = None) -> list[float]:
+    """Daily log returns, most recent last."""
+    px = closes(bars)
+    if lookback:
+        px = px[-(lookback + 1):]
+    return [math.log(px[i] / px[i - 1])
+            for i in range(1, len(px)) if px[i - 1] > 0]
+
+
+def correlation(a: list[float], b: list[float]) -> float | None:
+    """Pearson correlation over the overlapping tail of two return series.
+
+    Returns None rather than 0.0 when it cannot be computed. Zero is a
+    statement -- "these move independently" -- and claiming it from missing
+    data is the kind of fabricated number this system avoids elsewhere.
+    """
+    n = min(len(a), len(b))
+    if n < MIN_CORR_SAMPLES:
+        return None
+    x, y = a[-n:], b[-n:]
+    mx, my = sum(x) / n, sum(y) / n
+    sxy = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y))
+    sxx = sum((xi - mx) ** 2 for xi in x)
+    syy = sum((yi - my) ** 2 for yi in y)
+    if sxx <= 0 or syy <= 0:
+        return None
+    return sxy / math.sqrt(sxx * syy)
 
 
 def realized_vol(bars: list[dict], lookback: int | None = None) -> float | None:

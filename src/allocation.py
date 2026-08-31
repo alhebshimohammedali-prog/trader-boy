@@ -41,6 +41,8 @@ class Scored:
     pwt: float
     yield_pcd: float = 0.0
     reward: float = 0.0
+    crowding: float = 0.0
+    corr: float = 0.0
     selected: bool = False
 
     def row(self) -> dict:
@@ -58,6 +60,8 @@ class Scored:
             "opbt": round(self.opbt, 4),
             "yield_pcd": round(self.yield_pcd, 6),
             "reward": round(self.reward, 4),
+            "corr": round(self.corr, 3),
+            "crowding": round(self.crowding, 4),
             "pwt": round(self.pwt, 4),
             "selected": self.selected,
         }
@@ -108,13 +112,22 @@ def expected_yield(contract: Contract, days_to_expiry: int) -> float:
     return (contract.bid / contract.strike) * keep / max(days_to_expiry, 1)
 
 
-def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0) -> float:
-    """pwt = w*age - ubt + opbt + reward.
+def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0,
+        crowding: float = 0.0) -> float:
+    """pwt = w*age - ubt + opbt + reward - crowding.
 
-    age     cycles since this ticker first became runnable and was passed over
-    ubt     collateral-days this ticker has already consumed
-    opbt    committed resource-time of every OTHER queued candidate
-    reward  lambda x the candidate's rank on observed premium yield
+    age       cycles since this ticker last received capital
+    ubt       collateral-days this ticker has already consumed
+    opbt      committed resource-time of every OTHER queued candidate
+    reward    lambda x the candidate's rank on variance risk premium
+    crowding  mu x how correlated this name is with what we already hold
+
+    crowding is the term that makes diversification mean something. ubt stops
+    the book doubling into one TICKER and nothing more, so NVDA, MRVL, SMCI and
+    DRAM together read as four-way diversification while being one
+    semiconductor bet in four wrappers. Herfindahl would report 0.25 and look
+    healthy right up to the morning the sector gaps and every leg goes ITM at
+    once. Correlation is measured from the same daily bars the signal uses.
 
     opbt is the subtle term and it must exclude the candidate itself. Include
     its own size and the sign of the mechanism inverts: the allocator starts
@@ -143,7 +156,7 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0) -> float:
     # about 0.09 of ubt. Unweighted, a single cycle of waiting outranks eleven
     # wins' worth of capital consumed, which is not an index policy, it is
     # round-robin with extra arithmetic.
-    return config.AGE_WEIGHT * age - ubt + opbt + reward
+    return config.AGE_WEIGHT * age - ubt + opbt + reward - crowding
 
 
 def select(
@@ -152,6 +165,7 @@ def select(
     equity: float,
     today,
     edge: dict[str, float] | None = None,
+    crowd: dict[str, float] | None = None,
 ) -> tuple[Scored | None, list[Scored]]:
     """Score every runnable candidate, pick one.
 
@@ -206,9 +220,19 @@ def select(
         # interest elsewhere in this system.
         r = rank_within(y, pool) if (y is not None and pool) else 0.5
         reward = config.REWARD_LAMBDA * r
+
+        # Correlation against what is ALREADY held. An unmeasured pair
+        # contributes nothing rather than a assumed zero: "we could not tell"
+        # and "they move independently" are different claims, and only one of
+        # them is safe to act on.
+        c = (crowd or {}).get(ticker)
+        crowding = config.CROWDING_MU * max(0.0, c) if c is not None else 0.0
+
         scored.append(Scored(contract, signal, age, ubt, opbt,
-                             pwt(age, ubt, opbt, reward),
-                             y if y is not None else 0.0, reward))
+                             pwt(age, ubt, opbt, reward, crowding),
+                             y if y is not None else 0.0, reward,
+                             crowding=crowding,
+                             corr=c if c is not None else 0.0))
 
     winner = max(
         scored,
