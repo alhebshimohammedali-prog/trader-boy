@@ -232,6 +232,8 @@ python tools/ablation.py              # PWT vs greedy / random / round-robin
 python tools/ablation.py --from-log   # replayed over real logged candidates
 python tools/offline_cycle.py         # full cycle against a fake broker
 python tools/probe.py                 # live tool discovery, null-Greek census, collateral table
+python tools/bench.py <model...>      # model fitness: parse rate, judgment, discipline
+python tools/report.py                # render the newest run as a shareable HTML report
 python run.py --once --dry            # one live cycle, no order sent
 python run.py                         # the loop
 python run.py --comp                  # the competition account
@@ -356,6 +358,34 @@ Against the reporting standard they propose:
 
 One gap we do not close. An LLM provider can change model versions underneath us
 mid-run. It is logged per decision, so at least the drift is visible.
+
+---
+
+## What a run leaves behind
+
+Every run writes to `runs/<timestamp>/`:
+
+| file | what it is |
+|---|---|
+| `cycles.jsonl` | one record per cycle, the auditable trace. Replayable by `ablation.py --from-log` |
+| `console.log` | the readable transcript, exactly as it appeared in the terminal |
+| `metrics.json` | the aggregate numbers, written at finalise |
+| `report.html` | generated on demand by `tools/report.py` |
+
+`runs/supervisor.log` records every restart when running under `keepalive.ps1`.
+
+The transcript exists because a four-day unattended run outlives any terminal
+scrollback, and a supervisor restart opens a new window. The JSONL is what you
+replay; the transcript is what you read.
+
+`tools/report.py` renders a run as a single self-contained HTML file: metrics
+first, then every cycle in order with the gates that rejected candidates, the
+allocation table that arbitrated between the survivors, both model verdicts,
+and the fill. No external CSS, fonts, or scripts, so it opens offline.
+
+No-trade cycles are included deliberately, and are most of them. A report
+containing only trades cannot show the agent declining for good reasons, which
+is half of what the run is evidence of.
 
 ---
 

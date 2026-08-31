@@ -30,22 +30,40 @@ class Logbook:
         self.dir = Path(run_dir or Path(config.RUNS_DIR) / stamp)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "cycles.jsonl"
+        # The readable transcript. cycles.jsonl is the auditable record and is
+        # the right thing to replay, but nobody reads it to find out what
+        # happened -- they read the table. Keeping only the terminal copy means
+        # the session is lost to a scrollback limit, a closed window, or a
+        # supervisor restart, which over four unattended days is most of it.
+        self.console = self.dir / "console.log"
         self.echo = echo
         self.records: list[dict] = []
 
     # ------------------------------------------------------------- write ---
+
+    def _emit(self, text: str) -> None:
+        """Print and persist. Append-only, and a transcript failure must never
+        take the agent down with it."""
+        if self.echo:
+            print(text)
+        try:
+            with self.console.open("a", encoding="utf-8") as fh:
+                fh.write(text + "\n")
+        except OSError:
+            pass
 
     def cycle(self, record: dict) -> None:
         record.setdefault("timestamp", datetime.now().astimezone().isoformat())
         self.records.append(record)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
-        if self.echo:
-            self._print(record)
+        self._print(record)
 
     def note(self, text: str) -> None:
-        if self.echo:
-            print(text)
+        # Notes carry the startup tool-resolution table and the competition
+        # account warning -- the evidence the broker integration resolved, and
+        # which account was live. Previously echoed and never written down.
+        self._emit(text)
 
     # ------------------------------------------------------------- print ---
 
@@ -54,36 +72,36 @@ class Logbook:
         eq = r.get("equity") or 0.0
         dd = r.get("drawdown") or 0.0
         dep = r.get("deployed_pct") or 0.0
-        print(f"\n{'=' * 72}")
-        print(f"cycle {n}  {r.get('timestamp', '')[:19]}   "
+        self._emit(f"\n{'=' * 72}")
+        self._emit(f"cycle {n}  {r.get('timestamp', '')[:19]}   "
               f"equity ${eq:,.2f}   deployed {dep:.0%}   dd {dd:.2%}")
 
         gated = r.get("gate_results") or []
         if gated:
             failed = [g for g in gated if not g.get("passed")]
-            print(f"\n  gates: {len(gated) - len(failed)}/{len(gated)} candidates runnable")
+            self._emit(f"\n  gates: {len(gated) - len(failed)}/{len(gated)} candidates runnable")
             for g in failed[:8]:
-                print(f"    x {g.get('ticker',''):6s} {g.get('reason','')[:88]}")
+                self._emit(f"    x {g.get('ticker',''):6s} {g.get('reason','')[:88]}")
 
         table = r.get("runnable_table") or []
         if table:
-            print(f"\n  {'ticker':7s} {'signal':>7s} {'age':>4s} {'ubt':>7s} "
+            self._emit(f"\n  {'ticker':7s} {'signal':>7s} {'age':>4s} {'ubt':>7s} "
                   f"{'opbt':>6s} {'pwt':>8s}   sel")
             for row in table:
-                print(f"  {row['ticker']:7s} {row['signal']:7.3f} {row['age']:4d} "
+                self._emit(f"  {row['ticker']:7s} {row['signal']:7.3f} {row['age']:4d} "
                       f"{row['ubt']:7.3f} {row['opbt']:6.3f} {row['pwt']:8.3f}   "
                       f"{'<-- SELECTED' if row.get('selected') else ''}")
 
         first, crit, d = r.get("first_pass"), r.get("critique"), r.get("decision")
         if first:
-            print(f"\n  LLM    [{first.get('provider','?')}] "
+            self._emit(f"\n  LLM    [{first.get('provider','?')}] "
                   f"{first.get('action','?').upper()} "
                   f"x{first.get('size_multiplier', 0):.2f}")
-            print(f"    {first.get('reasoning','')[:180]}")
+            self._emit(f"    {first.get('reasoning','')[:180]}")
         elif d:
-            print(f"\n  LLM    [{d.get('provider','?')}] {d.get('action','?').upper()} "
+            self._emit(f"\n  LLM    [{d.get('provider','?')}] {d.get('action','?').upper()} "
                   f"x{d.get('size_multiplier', 0):.2f}")
-            print(f"    {d.get('reasoning','')[:200]}")
+            self._emit(f"    {d.get('reasoning','')[:200]}")
 
         if crit:
             # A critic that failed is not a critic that agreed. Say which,
@@ -95,33 +113,33 @@ class Logbook:
                 mark = "OVERRODE"
             else:
                 mark = "concurred"
-            print(f"  CRITIC [{crit.get('provider','?')}] "
+            self._emit(f"  CRITIC [{crit.get('provider','?')}] "
                   f"{crit.get('action','?').upper()} "
                   f"x{crit.get('size_multiplier', 0):.2f}  ({mark})")
-            print(f"    {crit.get('reasoning','')[:180]}")
+            self._emit(f"    {crit.get('reasoning','')[:180]}")
 
         f = r.get("fill")
         if f:
             slip = f.get("slippage")
             slip_s = f"{slip:+.3f}" if isinstance(slip, (int, float)) else "n/a"
-            print(f"\n  ORDER {f.get('symbol','')}  status={f.get('status','?')}  "
+            self._emit(f"\n  ORDER {f.get('symbol','')}  status={f.get('status','?')}  "
                   f"filled {f.get('filled_qty',0)}/{f.get('requested_qty',0)}  "
                   f"limit {f.get('limit_price')}  fill {f.get('fill_price')}  "
                   f"slippage {slip_s}")
             if f.get("dropped_args"):
-                print(f"    note: server schema dropped args {f['dropped_args']}")
+                self._emit(f"    note: server schema dropped args {f['dropped_args']}")
 
         rec = r.get("reconciliation")
         if rec:
-            print(f"  reconcile: {rec.get('summary','')}")
+            self._emit(f"  reconcile: {rec.get('summary','')}")
             if rec.get("fill_check", {}).get("diverged"):
-                print(f"    !! DIVERGENCE {rec['fill_check'].get('note','')}")
+                self._emit(f"    !! DIVERGENCE {rec['fill_check'].get('note','')}")
 
         if r.get("no_trade_reason"):
-            print(f"\n  NO TRADE: {r['no_trade_reason']}")
+            self._emit(f"\n  NO TRADE: {r['no_trade_reason']}")
 
         if r.get("narrative"):
-            print(f"\n  > {r['narrative']}")
+            self._emit(f"\n  > {r['narrative']}")
 
     # ----------------------------------------------------------- metrics ---
 
@@ -213,7 +231,7 @@ class Logbook:
             json.dumps(m, indent=2), encoding="utf-8"
         )
         if self.echo:
-            print(f"\n{'=' * 72}\nrun metrics -> {self.dir / 'metrics.json'}")
+            self._emit(f"\n{'=' * 72}\nrun metrics -> {self.dir / 'metrics.json'}")
             for k, v in m.items():
-                print(f"  {k:32s} {v}")
+                self._emit(f"  {k:32s} {v}")
         return m
