@@ -53,7 +53,13 @@ class Logbook:
             pass
 
     def cycle(self, record: dict) -> None:
-        record.setdefault("timestamp", datetime.now().astimezone().isoformat())
+        # ET, not local. Every deadline in this system is Eastern -- the open,
+        # the entry cutoff, the Thursday mark -- and the operator's machine is
+        # twelve hours ahead of it. A local stamp made a Sunday 21:19 ET cycle
+        # read as "09:19" in the log, which looks like a Monday morning run
+        # that happened before the market opened. The record has to be
+        # auditable against the schedule it is scored on.
+        record.setdefault("timestamp", datetime.now(config.ET).isoformat())
         self.records.append(record)
         with self.path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(record, default=str) + "\n")
@@ -73,7 +79,7 @@ class Logbook:
         dd = r.get("drawdown") or 0.0
         dep = r.get("deployed_pct") or 0.0
         self._emit(f"\n{'=' * 72}")
-        self._emit(f"cycle {n}  {r.get('timestamp', '')[:19]}   "
+        self._emit(f"cycle {n}  {r.get('timestamp', '')[:19]} ET   "
               f"equity ${eq:,.2f}   deployed {dep:.0%}   dd {dd:.2%}")
 
         gated = r.get("gate_results") or []

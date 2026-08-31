@@ -1,0 +1,59 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 35 (max strike $250)
+  23 rejected by the gates before ranking
+universe (11, scanned): SMCI, MRVL, DRAM, PLTR, PYPL, SPCX, NOW, CRM, NVDA, SLV, NFLX
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 1  2026-08-31T09:19:20   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 6/6 candidates runnable
+
+  ticker   signal  age     ubt   opbt      pwt   sel
+  SMCI      0.827    0   0.000  3.242    3.517   <-- SELECTED
+  DRAM      0.736    0   0.000  3.168    3.343   
+  SPCX      0.691    0   0.000  2.846    2.921   
+  MRVL      0.782    0   0.000  2.568    2.793   
+  PLTR      0.600    0   0.000  2.668    2.793   
+  CRM       0.645    0   0.000  2.398    2.423   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is a sound cash-secured put with a 16 delta, 4 DTE, and a reasonable premium relative to the high IV environment. The position size is only 3.4% of equity, well withi
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is a valid 16-delta cash-secured put with sufficient time to mark, minimal portfolio concentration, and no internal inconsistencies in the quote or sizing.
+  reconcile: no position change
+
+  NO TRADE: dry run: order not submitted
+
+  > The agent selected SMCI as a 16-delta, 4-day cash-secured put from a pool of six eligible candidates, with both the decision and critique stages approving the trade at full size. No order was submitted because the cycle was executed as a dry run.
+
+========================================================================
+run metrics -> runs\20260831-091836\metrics.json
+  cycles                           1
+  trades                           0
+  capital_utilisation_pct          0.0
+  mean_candidate_wait_cycles       0.0
+  herfindahl_concentration         0.0
+  premium_collected_net            0.0
+  premium_per_capital_day          None
+  mean_slippage_per_contract       None
+  worst_slippage_per_contract      None
+  total_slippage_cost              0.0
+  slippage_pct_of_gross_premium    None
+  mean_order_attempts              None
+  no_trade_cycles                  1
