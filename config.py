@@ -332,7 +332,33 @@ CROWDING_MU = 0.3
 REWARD_LAMBDA = 0.3
 
 PER_POSITION_CAP = 0.25
-PORTFOLIO_CAP = 0.60  # total collateral / equity
+
+# Total collateral / equity. Raised from 0.60 deliberately: at 0.60, forty
+# thousand dollars of cash-secured capacity sat idle all week earning nothing,
+# which is a real cost and not a safety margin.
+#
+# This is NOT leverage. The account reports $400,000 of buying power on
+# $100,000 of equity, and using it would mean selling naked puts at roughly a
+# fifth of the collateral -- about 4x the notional. That is the wrong position
+# to lever, because premium is the MAXIMUM gain while the loss runs all the way
+# to the strike: leverage multiplies a capped ceiling and an uncapped floor by
+# the same factor.
+#
+# The decisive number is where the drawdown breaker fires. Entries sit ~2% OTM,
+# so a drop of D% puts them (D-2)% in the money, and the 3% breaker trips at:
+#
+#   deployed  60%  ->  a 7.0% adverse move
+#   deployed  85%  ->  a 5.5% adverse move   (chosen)
+#   deployed 100%  ->  a 5.0% adverse move
+#   deployed 240%  ->  a 3.25% adverse move  <- levered, and 3.25% over four
+#                                               sessions is ordinary
+#
+# At 240% the book trips its own breaker on a normal down day, which halts
+# entries AND force-closes the nearest-the-money short. That is the worst
+# outcome available: take the loss, then stop collecting premium. 0.85 buys
+# ~42% more premium than 0.60 while keeping the trigger at a move that is
+# genuinely uncommon in four days.
+PORTFOLIO_CAP = 0.85
 MIN_OPEN_INTEREST = 100
 # Ceiling on the bid as a fraction of strike. A 4-day put struck 1-2.5% OTM
 # should collect well under 1% of strike; anything near 5% is a stale, mis-

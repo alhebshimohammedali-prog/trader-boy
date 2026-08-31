@@ -437,9 +437,21 @@ def test_gates():
     g = gates.evaluate(contract(), **{**base, "breaker_tripped": True})
     check("g5 rejects when breaker tripped", not g.passed and "circuit_breaker" in g.reason)
 
-    g = gates.evaluate(contract(), **{**base, "deployed_collateral": 58_000.0})
+    # Derived from config, not hardcoded. A literal here silently stopped
+    # testing anything the moment PORTFOLIO_CAP moved from 0.60 to 0.85: the
+    # old 58,000 fixture no longer breached, so the gate "passed" its own test
+    # by not firing.
+    cap = config.PORTFOLIO_CAP * base["equity"]
+    coll = contract().collateral
+    g = gates.evaluate(contract(), **{**base, "deployed_collateral": cap - coll / 2})
     check("g6 rejects portfolio over-deployment",
-          not g.passed and "portfolio_cap" in g.reason)
+          not g.passed and "portfolio_cap" in g.reason,
+          f"cap {cap:,.0f}, this fill would reach {cap + coll / 2:,.0f}")
+
+    # And the other direction: deployment well inside the cap must be allowed,
+    # or raising the cap buys nothing.
+    g = gates.evaluate(contract(), **{**base, "deployed_collateral": cap - coll * 2})
+    check("g6 allows a fill that stays inside the cap", g.passed, g.reason)
 
     blackout = config.MACRO_EVENTS[0][0]
     g = gates.evaluate(contract(), **{**base, "now": blackout})
