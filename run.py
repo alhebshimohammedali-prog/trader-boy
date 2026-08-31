@@ -18,7 +18,7 @@ import sys
 from dotenv import load_dotenv
 
 import config
-from src.agent import Agent, now_et
+from src.agent import Agent, market_open, now_et
 from src.logbook import Logbook
 from src.mcp_client import AlpacaMCP
 
@@ -68,6 +68,8 @@ async def main() -> int:
     ap.add_argument("--once", action="store_true", help="run a single cycle and exit")
     ap.add_argument("--dry", action="store_true", help="never submit an order")
     ap.add_argument("--quiet", action="store_true", help="jsonl only, no table")
+    ap.add_argument("--force", action="store_true",
+                    help="allow --once outside market hours (stale quotes)")
     ap.add_argument("--no-scan", action="store_true",
                     help="skip the market scan; use the configured universe")
     ap.add_argument("--flatten", action="store_true",
@@ -94,6 +96,17 @@ async def main() -> int:
             if args.flatten:
                 await agent.flatten()
             elif args.once:
+                # run_forever refuses to trade outside the session; --once did
+                # not, because it calls run_cycle directly. Running it after
+                # the close placed a real order on stale quotes, which Alpaca
+                # queued for the next open -- a Monday-afternoon price waiting
+                # to fill into Tuesday's market. Nobody asks for that.
+                if not market_open(now_et()) and not args.dry and not args.force:
+                    log.note("\nMarket is closed. --once would price off stale "
+                             "quotes and leave a resting order for the next "
+                             "open.\nUse --dry to exercise the cycle without "
+                             "ordering, or --force if you meant it.")
+                    return 0
                 await agent.run_cycle()
             else:
                 await agent.run_forever()
