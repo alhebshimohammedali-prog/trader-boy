@@ -92,10 +92,12 @@ class Logbook:
         table = r.get("runnable_table") or []
         if table:
             self._emit(f"\n  {'ticker':7s} {'signal':>7s} {'age':>4s} {'ubt':>7s} "
-                  f"{'opbt':>6s} {'pwt':>8s}   sel")
+                  f"{'opbt':>6s} {'rwd':>5s} {'corr':>6s} {'pwt':>8s}   sel")
             for row in table:
                 self._emit(f"  {row['ticker']:7s} {row['signal']:7.3f} {row['age']:4d} "
-                      f"{row['ubt']:7.3f} {row['opbt']:6.3f} {row['pwt']:8.3f}   "
+                      f"{row['ubt']:7.3f} {row['opbt']:6.3f} "
+                      f"{row.get('reward', 0.0):5.2f} {row.get('corr', 0.0):+6.2f} "
+                      f"{row['pwt']:8.3f}   "
                       f"{'<-- SELECTED' if row.get('selected') else ''}")
 
         first, crit, d = r.get("first_pass"), r.get("critique"), r.get("decision")
