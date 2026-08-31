@@ -45,6 +45,10 @@ TOOL_CANDIDATES: dict[str, list[str]] = {
     "stock_bars": ["get_stock_bars", "get_historical_bars", "get_bars"],
     "stock_quote": ["get_stock_latest_quote", "get_latest_quote", "get_stock_quote"],
     "activities": ["get_account_activities_by_type", "get_account_activities"],
+    # Universe scanning (tools/scan.py). Not in REQUIRED: the scan is a
+    # pre-flight step and the agent trades fine without it.
+    "most_active": ["get_most_active_stocks", "get_most_actives"],
+    "movers": ["get_market_movers", "get_movers"],
 }
 
 # Operations the agent cannot run without. Missing -> hard fail at startup.

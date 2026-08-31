@@ -12,3 +12,6 @@ runs/offline/
 .claude/settings.local.json
 attention_weighted.egg-info/
 *.egg-info/
+
+# written by tools/scan.py --write; a run artifact, not source
+universe.json

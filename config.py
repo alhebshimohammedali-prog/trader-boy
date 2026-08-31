@@ -58,6 +58,33 @@ UNIVERSE_CANDIDATES = [
     "CSCO", "DIS", "INTC", "GM", "UBER",
 ]
 
+# tools/scan.py --write picks the universe from the live market and drops it
+# here. The list above is the fallback, and stays the fallback on purpose: a
+# scanner that fails, hangs, or returns nonsense must not be able to stop the
+# agent trading. Worst case is the universe we already had.
+#
+# Guarded rather than trusted -- a truncated or hand-edited file would
+# otherwise silently shrink the universe until PWT has nothing to arbitrate,
+# which is the failure mode that raises no error and just stops trading.
+def _scanned_universe(path: str = "universe.json") -> list[str] | None:
+    import json
+    import os
+
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            blob = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if blob.get("expiry") != TARGET_EXPIRY:
+        return None  # scanned for a different expiry; the chains would not match
+    names = blob.get("universe")
+    if not isinstance(names, list):
+        return None
+    names = [n for n in names if isinstance(n, str) and n.isalpha()]
+    return names if len(names) >= UNIVERSE_MIN_NAMES else None
+
 # !! VERIFY BEFORE FIRST ENTRY: these names are new to the universe and their
 # earnings dates have NOT been checked. The old list was mega-caps whose
 # reporting season was known to be over; that assurance does not carry over.
@@ -66,6 +93,16 @@ UNIVERSE_CANDIDATES = [
 # Pruned at startup by the collateral table in tools/probe.py: any name whose
 # target strike implies collateral > PER_POSITION_CAP x equity is untradeable.
 UNIVERSE_MIN_NAMES = 6  # below this, PWT arbitrates nothing (§6)
+
+# Applied here rather than at the list above, because the guard needs
+# TARGET_EXPIRY and UNIVERSE_MIN_NAMES to exist first. Any rejection leaves the
+# hardcoded fallback in place.
+_SCANNED = _scanned_universe()
+if _SCANNED:
+    UNIVERSE_CANDIDATES = _SCANNED
+    UNIVERSE_SOURCE = "universe.json (tools/scan.py)"
+else:
+    UNIVERSE_SOURCE = "config.py fallback list"
 
 # !! CHECK BEFORE MONDAY, alongside earnings: EX-DIVIDEND DATES.
 # A stock going ex-dividend drops by roughly the dividend on a known date -- a

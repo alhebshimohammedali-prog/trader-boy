@@ -63,6 +63,15 @@ def pick_contract(chain: list[Contract], spot: float | None) -> tuple[Contract |
         lo = spot * (1 - config.MONEYNESS_MAX)
         hi = spot * (1 - config.MONEYNESS_MIN)
         window = [c for c in puts if lo <= c.strike <= hi]
+        # The fallback exists for contracts whose delta the feed could not
+        # solve. It must not become a way around the delta band for contracts
+        # whose delta is known and out of it. A universe scan surfaced this:
+        # AAL had deltas on every strike, none inside 0.16-0.30, and the
+        # moneyness window happily returned a 0.40-delta put -- more than twice
+        # the assignment risk the band exists to cap, selected by a path meant
+        # to handle MISSING data rather than unwelcome data.
+        window = [c for c in window if c.delta is None
+                  or config.DELTA_MIN <= abs(c.delta) <= config.DELTA_MAX]
         if window:
             target = spot * (1 - config.MONEYNESS_TARGET)
             best = min(window, key=lambda c: abs(c.strike - target))

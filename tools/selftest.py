@@ -137,6 +137,23 @@ def test_chain():
                        held_symbols=set())
     check("a real quote does NOT trip the ceiling", g.passed, g.reason)
 
+    # The moneyness fallback exists for MISSING delta, not unwelcome delta. A
+    # live scan found AAL quoting deltas on every strike, none in band, and the
+    # fallback returning a 0.40-delta put -- twice the assignment risk the band
+    # caps, reached through a path meant to handle absent data.
+    from src.agent import pick_contract
+
+    def p(strike, delta):
+        return Contract(symbol=f"AAL260904P{int(strike * 1000):08d}",
+                        underlying="AAL", strike=strike, expiry=config.TARGET_EXPIRY,
+                        bid=0.22, ask=0.24, open_interest=900, delta=delta)
+
+    got, _ = pick_contract([p(13.5, -0.399), p(13.0, -0.34)], spot=13.68)
+    check("known out-of-band delta is NOT reachable via moneyness", got is None,
+          f"got delta {got.delta if got else None}")
+    got, why = pick_contract([p(13.5, None), p(13.0, None)], spot=13.68)
+    check("genuinely missing delta still uses the fallback", got is not None, why)
+
 
 # ------------------------------------------------------------ signal ------
 
