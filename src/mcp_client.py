@@ -68,6 +68,32 @@ class ToolResolutionError(RuntimeError):
     pass
 
 
+# Pinned, after an unpinned `uvx alpaca-mcp-server` broke mid-competition.
+#
+# The server ran all morning, then stopped starting at all:
+#
+#   ModuleNotFoundError: No module named 'fastmcp.tools.tool'
+#   alpaca_mcp_server/security.py:14 -> from fastmcp.tools.tool import ToolResult
+#
+# Nothing here changed. uvx re-resolved its dependencies and picked up a
+# fastmcp that had moved that module, so a transitive dependency of a tool we
+# invoke by name took the whole agent down between one run and the next. The
+# symptom at our end was only "MCPError: Connection closed" at initialize,
+# which says nothing about the cause -- the real error is on the subprocess's
+# stderr, which the stdio client discards.
+#
+# Pinning both the server and the dependency that broke makes the run
+# reproducible, which is also what the write-up claims. Override with
+# ALPACA_MCP_ARGS (space-separated) to move off a pin without editing code,
+# since the next break will not wait for a convenient moment either.
+DEFAULT_SERVER_ARGS = ["--with", "fastmcp==3.4.7", "alpaca-mcp-server==2.3.0"]
+
+
+def server_args() -> list[str]:
+    override = os.getenv("ALPACA_MCP_ARGS", "").strip()
+    return override.split() if override else list(DEFAULT_SERVER_ARGS)
+
+
 class AlpacaMCP:
     """Async context manager wrapping one alpaca-mcp-server subprocess."""
 
@@ -118,7 +144,7 @@ class AlpacaMCP:
         self.assert_paper()
         self._stack = AsyncExitStack()
         params = StdioServerParameters(
-            command="uvx", args=["alpaca-mcp-server"], env=self._env()
+            command="uvx", args=server_args(), env=self._env()
         )
         read, write = await self._stack.enter_async_context(stdio_client(params))
         self.session = await self._stack.enter_async_context(ClientSession(read, write))
