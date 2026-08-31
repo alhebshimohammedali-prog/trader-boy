@@ -239,6 +239,21 @@ class AlpacaMCP:
 
         if not payload:
             return None
+
+        # The server does not always set isError. A failed tool call can come
+        # back as ordinary text content, so a caller that only guards against
+        # exceptions treats an error message as data.
+        #
+        # That cost a week. place_option_order rejected every order on argument
+        # validation and RETURNED the rejection, so the executor carried on to
+        # poll for an order that was never created -- four days of cycles would
+        # have placed nothing while logging nothing that looked like a failure.
+        # Raising here makes every caller handle it or crash loudly, and the
+        # callers that legitimately expect "not found" already catch.
+        low = payload.lstrip()[:200].lower()
+        if low.startswith("error calling tool") or "validation error" in low:
+            raise RuntimeError(f"{name} failed: {payload[:400]}")
+
         try:
             parsed = json.loads(payload)
         except json.JSONDecodeError:

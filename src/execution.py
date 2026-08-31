@@ -87,23 +87,63 @@ class Executor:
     # -- placement -----------------------------------------------------------
 
     async def _submit(self, contract: Contract, qty: int, limit: float, coid: str):
-        """Build args from the tool's own schema, not the REST shape."""
+        """Build args from the tool's own schema, not the REST shape.
+
+        qty and limit_price go as STRINGS. The MCP tool validates them with
+        pydantic and rejects numbers outright:
+
+            2 validation errors for call[place_option_order]
+            qty          Input should be a valid string  [input_value=1]
+            limit_price  Input should be a valid string  [input_value=1482.4]
+
+        This is not discoverable from the schema -- place_option_order declares
+        no properties at all, so fit_args passes everything through untouched
+        and nothing type-checks it on the way out. It was only found by sending
+        a deliberately unfillable order against the live endpoint.
+
+        Worse, the rejection is RETURNED rather than raised: the call comes
+        back as a string of error text with no exception, so the executor would
+        have carried on to poll for an order that was never created. Four days
+        of cycles would have placed zero trades and logged nothing that looked
+        like a failure.
+        """
+        # Canonical names only. We used to send aliases alongside them --
+        # option_symbol beside symbol, quantity beside qty, order_type beside
+        # type -- as insurance against a server that spelled them differently.
+        # This tool rejects unknown keyword arguments outright, and because it
+        # publishes no schema, fit_args had nothing to filter them against, so
+        # the insurance was itself the failure.
         args, dropped = self.mcp.fit_args(
             "place_option_order",
             symbol=contract.symbol,
-            option_symbol=contract.symbol,
             side="sell",
-            qty=qty,
-            quantity=qty,
+            qty=str(qty),
             type="limit",
-            order_type="limit",
             time_in_force="day",
-            limit_price=limit,
+            limit_price=f"{limit:.2f}",
             client_order_id=coid,
             # Options-specific: selling to open is not the same as closing.
             position_intent="sell_to_open",
         )
-        return await self.mcp.call("place_option_order", **args), dropped
+        resp = await self.mcp.call("place_option_order", **args)
+
+        # If a future server version renames or drops a field, strip exactly
+        # what it named and retry once, rather than failing the session over a
+        # keyword. Bounded to one retry so a genuine rejection still surfaces.
+        if isinstance(resp, str) and "unexpected_keyword_argument" in resp:
+            unexpected = {ln.strip() for ln in resp.splitlines()
+                          if ln.strip() and ln.strip() in args}
+            if unexpected:
+                for k in unexpected:
+                    args.pop(k, None)
+                dropped = list(dropped) + sorted(unexpected)
+                resp = await self.mcp.call("place_option_order", **args)
+
+        # A validation failure arrives as plain text, not an exception. Turn it
+        # into one so it cannot be mistaken for an order that exists.
+        if isinstance(resp, str) and "validation error" in resp.lower():
+            raise RuntimeError(f"order rejected by tool validation: {resp[:300]}")
+        return resp, dropped
 
     async def _poll(self, coid: str, timeout: int) -> dict | None:
         """Poll for terminal order state with exponential backoff.
