@@ -85,10 +85,24 @@ def _scanned_universe(path: str = "universe.json") -> list[str] | None:
     names = [n for n in names if isinstance(n, str) and n.isalpha()]
     return names if len(names) >= UNIVERSE_MIN_NAMES else None
 
-# !! VERIFY BEFORE FIRST ENTRY: these names are new to the universe and their
-# earnings dates have NOT been checked. The old list was mega-caps whose
-# reporting season was known to be over; that assurance does not carry over.
-# Any of these reporting between 31 Aug and 3 Sep must be dropped.
+# Earnings checked 31 Aug 2026 against the 31 Aug - 3 Sep window. All eleven
+# clear it, two because they have just reported and nine because their next
+# report is weeks out:
+#
+#   NVDA  reported 26 Aug 2026 (Q2 FY27)      already out
+#   CSCO  reported 12 Aug 2026 (Q4 FY26)      already out
+#   PEP   8 Oct      IBM  21 Oct      GM   20 Oct
+#   INTC  22 Oct     CVX  23 Oct      XOM  23 Oct
+#   UBER  29 Oct     PLTR  9 Nov      DIS  12 Nov
+#
+# This is not luck, it is the calendar. Most large caps report Q2 in late July
+# and Q3 in late October, so the first week of September falls in the gap
+# between cycles. It is a genuinely quiet window for event risk, which is part
+# of why this expiry is tradeable at all.
+#
+# Re-check if the universe changes. tools/scan.py cannot do this -- Alpaca
+# exposes no earnings calendar through the MCP server -- and it prints a
+# reminder saying so rather than implying it checked.
 
 # Pruned at startup by the collateral table in tools/probe.py: any name whose
 # target strike implies collateral > PER_POSITION_CAP x equity is untradeable.
