@@ -11,10 +11,10 @@ The funnel is ordered cheapest-filter-first:
   batch quote       one call per 25 names, so price filtering is nearly free
   collateral cap    strike x 100 must fit PER_POSITION_CAP x equity, which
                     removes most of the market on price alone
-  exclusions        leveraged, inverse and crypto-proxy vehicles
   option chain      the expensive call, and only for survivors
   THE REAL GATES    gates.evaluate on the actual target contract
-  rank              expected_yield, the metric the allocator scores on
+  vol ceiling       realised vol measured from bars, not a list of tickers
+  rank              variance risk premium: implied vol minus realised
 
 Running the real gates is the part that matters. An earlier version ranked on
 yield alone and returned names whose target contract the agent would reject on
@@ -31,6 +31,7 @@ import config
 from src import gates
 from src.allocation import expected_yield
 from src.data import Data, by_symbol
+from src.signal import realized_vol
 
 # Below this the premium is rounding error against the spread. Above it the
 # collateral cap does the work. Both are about tradeability, not a view.
@@ -135,6 +136,13 @@ async def scan(mcp, equity: float, now, pool_size: int = 100,
                 if px > 0:
                     spots[sym] = px
 
+        # Both filters, because they catch different things and neither is
+        # sufficient. The realised-vol ceiling below is the general mechanism
+        # and needs no maintenance, but it is backward-looking: it cannot see
+        # that SQQQ is structurally 3x leveraged, or that BMNR holds an asset
+        # trading all weekend while the option market is shut. Measured on
+        # trailing bars both looked calm -- 0.56 and 0.63, comfortably under
+        # the ceiling -- and VRP ranked BMNR first of everything.
         affordable = [s for s, px in spots.items()
                       if MIN_PRICE <= px <= max_strike and s not in EXCLUDED]
         note(f"  pool {len(pool)} -> priced {len(spots)} -> affordable "
@@ -165,6 +173,37 @@ async def scan(mcp, equity: float, now, pool_size: int = 100,
             if not g.passed:
                 rejected.append((sym, g.reason or "gate"))
                 continue
+
+            # Measure the volatility rather than recognising the ticker. A
+            # denylist of leveraged and crypto names is a list someone typed:
+            # it goes stale the day a new 3x fund lists, and it never catches
+            # the ordinary equity that happens to be realising 120%. What
+            # actually disqualifies those names is the volatility itself, and
+            # that is a number we can read off the tape.
+            rv_check = None
+            try:
+                rv_check = realized_vol(await data.bars(sym, 40),
+                                        config.RV_LOOKBACK_DAYS)
+            except Exception as exc:  # noqa: BLE001
+                note(f"  {sym}: no realised vol ({type(exc).__name__})")
+            if rv_check is not None and rv_check > config.MAX_REALIZED_VOL:
+                rejected.append(
+                    (sym, f"realised vol {rv_check:.0%} over the "
+                          f"{config.MAX_REALIZED_VOL:.0%} ceiling"))
+                continue
+            # Realised vol from the same bars the signal layer uses. This is
+            # the measurement that replaces a denylist: a 3x fund or a bitcoin
+            # miner does not need to be recognised by NAME, it announces
+            # itself by realising three times the volatility of anything else.
+            rv = rv_check
+
+            iv = contract.iv
+            # The strategy's entire claimed edge, per name and measurable:
+            # implied vol richer than what the underlying is actually
+            # realising. Premium yield alone just ranks volatility, and
+            # volatility is what a short-put book dies of.
+            vrp = (iv - rv) if (iv is not None and rv is not None) else None
+
             rows.append({
                 "ticker": sym, "spot": round(spots[sym], 2),
                 "strike": contract.strike,
@@ -173,10 +212,28 @@ async def scan(mcp, equity: float, now, pool_size: int = 100,
                 "bid": contract.bid,
                 "spread": round((contract.ask or 0) - (contract.bid or 0), 3),
                 "oi": contract.open_interest, "delta": contract.delta,
+                "iv": iv, "rv": rv, "vrp": vrp,
                 "yield": expected_yield(contract, dte), "why": why,
             })
 
-        rows.sort(key=lambda r: r["yield"], reverse=True)
+        # Rank on the variance risk premium, not on premium yield.
+        #
+        # Measured live, this is not a refinement, it is a sign flip. Yield
+        # ranked CIFR first at 0.00283 -- and CIFR's implied vol was 1.06
+        # against realised 1.20, so that premium is high because the stock is
+        # moving MORE than the option price assumes. PLTR was realising double
+        # its implied (0.51 vs 1.01). A yield ranking systematically finds the
+        # names where selling volatility is underpriced, which is the opposite
+        # of the edge this strategy claims.
+        #
+        # Only 5 of 15 names that cleared the gates had positive VRP at all.
+        # Ranking on it puts those first instead of last.
+        #
+        # Yield still breaks ties and still ranks names whose vol we could not
+        # measure, since between two contracts with the same edge the one
+        # paying more per capital-day is strictly better.
+        rows.sort(key=lambda r: (r["vrp"] if r["vrp"] is not None else -9.0,
+                                 r["yield"]), reverse=True)
         return rows, rejected
     except Exception as exc:  # noqa: BLE001
         note(f"  scan failed: {type(exc).__name__}: {exc}")

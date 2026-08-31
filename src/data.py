@@ -311,8 +311,25 @@ class Data:
                 timeframe="1Day",
                 start=start,
                 end=end,
+                # REQUIRED on the free tier. Without it the request defaults to
+                # the SIP consolidated feed and returns
+                #   403 "subscription does not permit querying recent SIP data"
+                # for any range ending inside the recent window -- which ours
+                # always does, since it ends yesterday.
+                #
+                # The failure was silent and total: the 403 arrives as a 200
+                # with an error body, by_symbol finds no series, bars() returns
+                # [], and realized_vol and momentum both return None for every
+                # ticker on every cycle. The signal layer kept producing
+                # plausible-looking numbers off its remaining input, so nothing
+                # ever looked broken.
+                feed="iex",
             )
         except Exception:  # noqa: BLE001
+            return []
+        # An error body is not data. Returning [] here would be cached as a
+        # legitimate empty series on the next line up.
+        if isinstance(raw, dict) and "error" in raw:
             return []
         # {"bars": {"AAPL": [ {...}, ... ]}}
         series = by_symbol(raw, "bars", ticker)

@@ -321,6 +321,19 @@ SIGNAL_FLOOR = 0.30  # absolute floor under the relative rank
 # arbitrates a table of one and looks decorative even though it runs. Keep this
 # generous and let SIGNAL_FLOOR do the filtering, so candidates actually queue.
 SIGNAL_TOP_N = 6
+# Ceiling on realised volatility for universe admission. This replaces a
+# denylist of leveraged and crypto tickers: those names do not need to be
+# recognised by NAME, they announce themselves by realising two or three times
+# the volatility of anything else, and a measurement also catches the ordinary
+# equity that happens to be moving 120% while a typed list never would.
+#
+# Set from the live distribution rather than picked. At 0.80 the scan drops
+# CIFR (120%), PLTR (101%), SPCX (100%), SMCI (90%) and MRVL (90%), and keeps
+# NVDA (47%), PYPL (54%), NOW (55%), SLV (38%) and NFLX (33%) -- which is the
+# line between "pays a lot because it is dangerous" and "pays a lot because
+# implied is rich".
+MAX_REALIZED_VOL = 0.80
+
 RV_LOOKBACK_DAYS = 20
 IV_PERCENTILE_LOOKBACK_DAYS = 120
 MOMENTUM_LOOKBACK_DAYS = 5

@@ -1,0 +1,59 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 47 (max strike $250)
+  37 rejected by the gates before ranking
+universe (9, scanned): BMNR, SLV, NOW, NFLX, DRAM, NVDA, SQQQ, PYPL, CRM
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 1  2026-08-30T21:31:39 ET   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 6/6 candidates runnable
+
+  ticker   signal  age     ubt   opbt      pwt   sel
+  BMNR      0.747    0   0.000  2.106    2.381   <-- SELECTED
+  SQQQ      0.537    0   0.000  2.046    2.221   
+  DRAM      0.551    0   0.000  1.984    2.209   
+  SLV       0.366    0   0.000  1.966    1.991   
+  NOW       0.450    0   0.000  1.654    1.779   
+  CRM       0.506    0   0.000  1.214    1.289   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate passed all deterministic gates with a sound premium and delta within the specified band. Portfolio deployment is at 0%, leaving ample room for the 2.2% position size,
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is a single-leg cash-secured put with 2.2% equity deployment, well within limits, and the 4 DTE expiry aligns with the strategy's mark-to-market window without settlement
+  reconcile: no position change
+
+  NO TRADE: dry run: order not submitted
+
+  > Cycle 1 selected BMNR from six eligible candidates, as the single-leg cash-secured put passed all deterministic gates and the critique confirmed the 2.2% position size and 4-day expiry were within strategy limits. The order was not submitted because the system is currently in a dry run mode.
+
+========================================================================
+run metrics -> runs\20260831-092959\metrics.json
+  cycles                           1
+  trades                           0
+  capital_utilisation_pct          0.0
+  mean_candidate_wait_cycles       0.0
+  herfindahl_concentration         0.0
+  premium_collected_net            0.0
+  premium_per_capital_day          None
+  mean_slippage_per_contract       None
+  worst_slippage_per_contract      None
+  total_slippage_cost              0.0
+  slippage_pct_of_gross_premium    None
+  mean_order_attempts              None
+  no_trade_cycles                  1

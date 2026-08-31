@@ -1,0 +1,58 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 35 (max strike $250)
+  27 rejected by the gates before ranking
+universe (7, scanned): SLV, NOW, NFLX, DRAM, NVDA, PYPL, CRM
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 1  2026-08-30T21:33:39 ET   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 5/5 candidates runnable
+
+  ticker   signal  age     ubt   opbt      pwt   sel
+  DRAM      0.599    0   0.000  2.588    2.858   <-- SELECTED
+  SLV       0.421    0   0.000  2.570    2.600   
+  NOW       0.521    0   0.000  2.258    2.468   
+  NVDA      0.307    0   0.000  1.958    2.048   
+  CRM       0.593    0   0.000  1.818    1.968   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is a sound short put with a tight spread, appropriate delta, and no macro-event conflicts. Portfolio deployment is at zero, so there is no concentration or cap pressu
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is internally consistent, the spread is tight, the delta is within the 16-30 range, and there are no portfolio concentration or cap issues as this is the first position.
+  reconcile: no position change
+
+  NO TRADE: dry run: order not submitted
+
+  > Cycle 1 scored seven candidates, five of which cleared all gates, leading to the selection of a DRAM short put. The trade passed both decision and critique stages, but no order was submitted because the cycle was a dry run.
+
+========================================================================
+run metrics -> runs\20260831-093212\metrics.json
+  cycles                           1
+  trades                           0
+  capital_utilisation_pct          0.0
+  mean_candidate_wait_cycles       0.0
+  herfindahl_concentration         0.0
+  premium_collected_net            0.0
+  premium_per_capital_day          None
+  mean_slippage_per_contract       None
+  worst_slippage_per_contract      None
+  total_slippage_cost              0.0
+  slippage_pct_of_gross_premium    None
+  mean_order_attempts              None
+  no_trade_cycles                  1
