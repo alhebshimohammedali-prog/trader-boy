@@ -135,6 +135,18 @@ def _scanned_universe(path: str = "universe.json") -> list[str] | None:
 # target strike implies collateral > PER_POSITION_CAP x equity is untradeable.
 UNIVERSE_MIN_NAMES = 6  # below this, PWT arbitrates nothing (§6)
 
+# Build the universe from the live market at startup rather than trading a list
+# someone typed. The list below stays as the last fallback, not the default:
+# a scan that fails, or that yields fewer tradeable names than PWT needs to
+# arbitrate between, leaves it in place. --no-scan forces it.
+#
+# What the scan cannot do is check earnings -- Alpaca exposes no calendar
+# through the MCP server. The configured list has hand-verified dates; a
+# scanned one does not, and run.py says so on every start.
+AUTO_SCAN = True
+SCAN_POOL = 100   # screener hard-caps at 100 per call
+SCAN_TOP = 11
+
 # Applied here rather than at the list above, because the guard needs
 # TARGET_EXPIRY and UNIVERSE_MIN_NAMES to exist first. Any rejection leaves the
 # hardcoded fallback in place.
@@ -145,12 +157,8 @@ if _SCANNED:
 else:
     UNIVERSE_SOURCE = "config.py fallback list"
 
-# !! CHECK BEFORE MONDAY, alongside earnings: EX-DIVIDEND DATES.
-# A stock going ex-dividend drops by roughly the dividend on a known date -- a
-# mechanical move against a short put that no signal will predict. XOM and JPM
-# are the dividend payers here; if either goes ex-div between 31 Aug and 3 Sep,
-# drop it for the window. On a ~2% OTM strike a 0.7% quarterly drop is a third
-# of the buffer, given away for nothing.
+# (Ex-dividend dates were the other half of that check and are recorded above.
+# Nothing in the configured universe goes ex inside the window.)
 
 # !! HONEST NOTE ON GATE 8: this list has ZERO overlap with
 # UNIVERSE_CANDIDATES, so gate 8 cannot fire as configured. It is insurance

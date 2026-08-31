@@ -234,6 +234,7 @@ python tools/offline_cycle.py         # full cycle against a fake broker
 python tools/probe.py                 # live tool discovery, null-Greek census, collateral table
 python tools/bench.py <model...>      # model fitness: parse rate, judgment, discipline
 python tools/report.py                # render the newest run as a shareable HTML report
+python tools/scan.py                  # what the market scan would pick, changes nothing
 python run.py --once --dry            # one live cycle, no order sent
 python run.py                         # the loop
 python run.py --comp                  # the competition account
@@ -267,6 +268,36 @@ powercfg /change hibernate-timeout-ac 0
 ```
 
 `--comp` is the only thing standing between the dev account and the scored one.
+
+### Where the universe comes from
+
+Built from the live market at startup, not from a list in a file. Screener for
+the most-active names, one batched quote call per 25 to filter on price, the
+collateral cap (`strike x 100` inside `PER_POSITION_CAP`, which removes most of
+the market on price alone), then chains for the survivors, then **the real
+gates** on each target contract, then ranked on the same `expected_yield` the
+allocator scores.
+
+Running the actual gates is the part that matters. Ranking on yield alone
+returned names the agent would reject on sight -- PATH quoted 0.15 wide on a
+0.22 bid, a 51% spread against a 20% limit, ranked second. A universe of
+contracts that fail gate 3 is a zero-trade week wearing the costume of a scan.
+
+Yield ranking also ranks *volatility*, since volatility is what pays premium.
+Unfiltered it chose SOXL, SOXS, TQQQ and SQQQ -- 3x leveraged funds including a
+long/short pair on one underlying it proposed selling puts on simultaneously --
+then CIFR, BMNR and MSTR, a miner, a treasury company and a bitcoin proxy.
+Equities by listing, crypto by risk. Both categories are excluded by name.
+
+The hardcoded list in `config.py` is the fallback and stays the fallback. A scan
+that fails, or that yields fewer tradeable names than PWT needs to arbitrate
+between, leaves it untouched, and `src/universe.scan` never raises. A universe
+is not worth a session.
+
+One thing the scan cannot do is check earnings: Alpaca exposes no calendar
+through the MCP server. The configured list has hand-verified earnings and
+ex-dividend dates; a scanned one does not, and startup says so every run.
+`--no-scan` forces the verified list.
 
 Run `selftest.py` after touching `config.py`. Every knob in there is one edit
 away from silently disarming a risk gate, and a disarmed gate raises no

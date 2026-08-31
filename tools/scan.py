@@ -42,6 +42,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 from src.agent import pick_contract  # noqa: E402
 from src.allocation import expected_yield  # noqa: E402
+from src import gates  # noqa: E402
+from src.agent import now_et  # noqa: E402
 from src.data import Data, by_symbol  # noqa: E402
 from src.mcp_client import AlpacaMCP  # noqa: E402
 
@@ -75,37 +77,55 @@ LEVERAGED = {
 CRYPTO = {"IBIT", "ETHA", "FBTC", "GBTC", "ARKB", "BITB", "ETHE", "BITO", "BTF"}
 
 
-async def most_active(mcp, n: int) -> list[str]:
-    """Liquidity-ranked names. Falls back to the configured list if the
-    endpoint is unavailable -- a scan that cannot rank should say so rather
-    than silently returning something arbitrary."""
-    for op, kw in (("most_active", {"top": n}), ("most_active", {}),
-                   ("movers", {"top": n})):
-        if op not in mcp.resolved:
+# Alpaca's screener rejects top > 100 with a 400. Asking for more does not
+# degrade gracefully: the request fails, and a naive retry without the
+# parameter comes back with the ten-name default, which looks like a thin
+# market rather than a bad argument.
+SCREENER_MAX = 100
+
+
+def _symbols(payload) -> list[str]:
+    """Pull tickers out of whatever shape the screener returns."""
+    found: list[str] = []
+    stack = [payload]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                if k in ("symbol", "S") and isinstance(v, str):
+                    found.append(v)
+                else:
+                    stack.append(v)
+        elif isinstance(cur, list):
+            stack.extend(cur)
+    return found
+
+
+async def build_pool(mcp, n: int) -> list[str]:
+    """Union the screener endpoints, most-liquid first.
+
+    Most-active is the primary source because liquidity is the precondition
+    for everything downstream -- a name with no option volume fails the spread
+    gate no matter how attractive it looks. Movers are unioned in for breadth,
+    after, so ordering still favours liquidity.
+    """
+    out: list[str] = []
+
+    def add(syms):
+        for s in syms:
+            if s.isalpha() and 1 <= len(s) <= 5 and s not in out:
+                out.append(s)
+
+    for op, kw in (("most_active", {"top": min(n, SCREENER_MAX)}),
+                   ("movers", {"top": min(n, SCREENER_MAX)}),
+                   ("movers", {})):
+        if op not in mcp.resolved or len(out) >= n:
             continue
         try:
-            r = await mcp.call(op, **kw)
-        except Exception:  # noqa: BLE001
-            continue
-        syms: list[str] = []
-        stack = [r]
-        while stack:
-            cur = stack.pop()
-            if isinstance(cur, dict):
-                for k, v in cur.items():
-                    if k in ("symbol", "S") and isinstance(v, str):
-                        syms.append(v)
-                    else:
-                        stack.append(v)
-            elif isinstance(cur, list):
-                stack.extend(cur)
-        seen: list[str] = []
-        for s in syms:
-            if s.isalpha() and 1 <= len(s) <= 5 and s not in seen:
-                seen.append(s)
-        if seen:
-            return seen[:n]
-    return []
+            add(_symbols(await mcp.call(op, **kw)))
+        except Exception as exc:  # noqa: BLE001
+            print(f"  {op} unavailable: {str(exc)[:90]}")
+    return out[:n]
 
 
 async def main() -> int:
@@ -125,10 +145,10 @@ async def main() -> int:
         print(f"equity ${equity:,.0f}   position cap ${cap:,.0f}   "
               f"=> max strike ${max_strike:,.2f}\n")
 
-        pool = await most_active(mcp, args.pool)
-        if not pool:
-            pool = list(config.UNIVERSE_CANDIDATES)
-            print("most-active unavailable; falling back to the configured list")
+        pool = await build_pool(mcp, args.pool)
+        if len(pool) < config.UNIVERSE_MIN_NAMES:
+            pool = list(dict.fromkeys(pool + list(config.UNIVERSE_CANDIDATES)))
+            print("screener returned too little; topping up from the configured list")
         print(f"pool: {len(pool)} names")
 
         # One call for the lot. This is what makes scanning cheap enough to be
@@ -165,6 +185,7 @@ async def main() -> int:
 
         data = Data(mcp)
         rows = []
+        rejected: list[tuple[str, str]] = []
         for sym in affordable:
             try:
                 chain = await data.put_chain(sym, config.TARGET_EXPIRY)
@@ -174,6 +195,20 @@ async def main() -> int:
                 continue
             contract, why = pick_contract(chain, spots.get(sym))
             if contract is None:
+                rejected.append((sym, why))
+                continue
+
+            # Screen with the REAL gates rather than a lookalike. Ranking on
+            # yield alone selected names whose target contract the agent would
+            # reject on sight -- PATH quoted 0.15 wide on a 0.22 bid, a 51%
+            # spread against a 20% limit, and it ranked second. A universe of
+            # contracts that fail gate 3 is a zero-trade week wearing the
+            # costume of a market scan.
+            g = gates.evaluate(
+                contract, now=now_et(), equity=equity, spot=spots[sym],
+                deployed_collateral=0.0, breaker_tripped=False, held_symbols=set())
+            if not g.passed:
+                rejected.append((sym, g.reason or "gate"))
                 continue
             d = days_to_expiry
             rows.append({
@@ -201,6 +236,11 @@ async def main() -> int:
                   f"{(r['oi'] if r['oi'] is not None else -1):>7d} "
                   f"{(r['delta'] if r['delta'] is not None else 0):>7.3f} "
                   f"{r['yield']:>9.6f}")
+
+        if rejected:
+            print(f"\nrejected ({len(rejected)}):")
+            for sym, why in rejected[:14]:
+                print(f"  x {sym:6s} {str(why)[:84]}")
 
         chosen = [r["ticker"] for r in rows[:args.top]]
         print(f"\ntop {len(chosen)}: {chosen}")
