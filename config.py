@@ -103,6 +103,33 @@ def _scanned_universe(path: str = "universe.json") -> list[str] | None:
 # Re-check if the universe changes. tools/scan.py cannot do this -- Alpaca
 # exposes no earnings calendar through the MCP server -- and it prints a
 # reminder saying so rather than implying it checked.
+#
+# Ex-dividend dates checked the same day. Nothing goes ex inside the window:
+#
+#   XOM   17 Aug   passed        CVX   19 Aug   passed
+#   PEP    4 Sep   see below     GM     4 Sep   see below
+#   NVDA  10 Sep   after         CSCO  early Oct, DIS Dec (semi-annual)
+#   INTC  dividend suspended     PLTR, UBER  pay none
+#
+# PEP and GM both go ex on Fri 4 Sep, which is EXPIRY day and one session
+# after the Thu 3 Sep mark. The drop lands after equity has been scored, so it
+# cannot touch the result. That is worth stating precisely, because the naive
+# reading -- "PepsiCo pays ~1% and we are only 2.1% OTM, so half the cushion
+# goes" -- is the right worry aimed one day wide of the window.
+#
+# Two second-order effects, both benign here. Options already price expected
+# dividends into the forward, so a 4 Sep PEP or GM put carries slightly more
+# premium and shows slightly more delta at a given strike; because entries
+# target DELTA rather than percentage moneyness, the selected strike simply
+# sits a little further out in spot terms, which is the correct response and
+# needs no adjustment. And unlike short calls, short puts gain no early
+# assignment risk near an ex-date: exercising a put before it means delivering
+# stock and forfeiting the dividend, so a rational holder waits.
+#
+# IBM, CSCO and DIS are inferred from their established quarterly pattern
+# rather than individually confirmed. All three sit far outside the window on
+# that pattern, and an ex-date is in any case a sub-1% price move rather than
+# an event-scale risk, which is why earnings got the individual checks.
 
 # Pruned at startup by the collateral table in tools/probe.py: any name whose
 # target strike implies collateral > PER_POSITION_CAP x equity is untradeable.
