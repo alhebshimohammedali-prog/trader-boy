@@ -26,7 +26,12 @@ import config
 
 class Logbook:
     def __init__(self, run_dir: str | None = None, echo: bool = True):
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # ET, matching the cycle stamps. The run directory is how you find a
+        # session later, and naming it in whatever timezone the machine happens
+        # to be set to means the folder name and the records inside it disagree
+        # -- here by five hours, since the machine reads UTC+8 and the operator
+        # is in Riyadh.
+        stamp = datetime.now(config.ET).strftime("%Y%m%d-%H%M%S")
         self.dir = Path(run_dir or Path(config.RUNS_DIR) / stamp)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.path = self.dir / "cycles.jsonl"

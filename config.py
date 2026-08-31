@@ -20,7 +20,24 @@ TRADING_DAYS = ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03"]
 
 MARK_AT = et(2026, 9, 3, 16, 0)  # the number we are scored on
 ENTRY_CUTOFF = et(2026, 9, 3, 12, 0)  # no new positions after this
-SUBMISSION_DEADLINE = et(2026, 9, 4, 11, 0)  # 23:00 China Standard Time
+SUBMISSION_DEADLINE = et(2026, 9, 4, 11, 0)  # 18:00 Riyadh (AST, UTC+3)
+
+# Operator is in Riyadh, UTC+3 and no DST, while the market runs on Eastern.
+# Riyadh = ET + 7 while EDT is in force. The session lands in the local
+# evening, not overnight:
+#
+#   open          09:30 ET  ->  16:30 Riyadh
+#   last cycle    15:45 ET  ->  22:45 Riyadh
+#   close         16:00 ET  ->  23:00 Riyadh
+#   entry cutoff  Thu 12:00 ET  ->  Thu 19:00 Riyadh
+#   MARK          Thu 16:00 ET  ->  Thu 23:00 Riyadh
+#   submission    Fri 11:00 ET  ->  Fri 18:00 Riyadh
+#
+# The machine's own timezone is set to UTC+8, which is neither, so its wall
+# clock reads five hours ahead of the operator. Nothing in the agent depends on
+# it -- every decision goes through now_et(), which derives ET from UTC, and
+# that was checked against Alpaca's own clock endpoint and agreed to the
+# second. It only means the displayed local time is not the operator's.
 
 SESSION_OPEN = time(9, 30)
 SESSION_CLOSE = time(16, 0)
