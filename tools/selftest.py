@@ -409,6 +409,16 @@ def test_reward():
         by9 = {s.contract.underlying: s for s in s9}
         check("unmeasured pair carries no crowding penalty",
               by9["TWIN"].crowding == 0.0)
+
+        # A candidate on an underlying already held is maximally crowded, not
+        # exempt. Live, the exemption let it buy HOOD 99 while holding HOOD
+        # 100 -- 58% of the book in one name.
+        _, s10 = select([(twin, 0.5), (indep, 0.5)], st7, 100_000.0,
+                        date(2026, 8, 31), crowd={"TWIN": 1.0, "INDY": 0.0})
+        by10 = {s.contract.underlying: s for s in s10}
+        check("same-underlying candidate takes the full penalty",
+              abs(by10["TWIN"].crowding - config.CROWDING_MU) < 1e-9,
+              f"got {by10['TWIN'].crowding}")
         check("but a measured one does", by9["INDY"].crowding > 0.0)
 
         # Unmeasurable edge must be neutral -- never best, never worst.

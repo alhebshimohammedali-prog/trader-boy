@@ -1,0 +1,46 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 37 (max strike $250)
+  27 rejected by the gates before ranking
+universe (6, scanned): INTC, PLTR, HOOD, DRAM, NVDA, MRVL
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+  state rebuilt from broker positions: INTC, NFLX (ubt was missing)
+
+========================================================================
+cycle 2  2026-09-01T12:56:32 ET   equity $99,941.90   deployed 46%   dd 0.00%
+
+  gates: 3/5 candidates runnable
+    x INTC   g2 position_cap: already holding this exact contract
+    x HOOD   g2 position_cap: already holding this exact contract
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  DRAM      0.393    1   0.000  1.118  0.15  +0.88    1.103   <-- SELECTED
+  PLTR      0.339    1   0.000  0.752  0.25  +0.43    0.973   
+  MRVL      0.375    1   0.000  0.684  0.05  +0.77    0.603   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is sound with a 5.3% position size well within caps, portfolio deployment at 46% leaves ample room, and there are no data inconsistencies or macro-event conflicts.
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is within all strategic limits, the quote is consistent with the 3 DTE tenor and delta, and there are no specific defects in concentration, deployment headroom, or data i
+
+  ORDER DRAM260904P00053000  status=filled  filled 1/1  limit 0.25  fill 0.27  slippage -0.005
+  reconcile: no position change
+
+  > The agent selected DRAM from five eligible candidates after INTC and HOOD were blocked by position caps, and the trade was approved and filled at 0.27.

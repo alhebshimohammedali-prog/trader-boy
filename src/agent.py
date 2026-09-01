@@ -269,7 +269,20 @@ class Agent:
             rets = {t: signal_mod.log_returns(v.get("bars") or [])
                     for t, v in raw.items()}
             for cand in rets:
+                # A candidate on an underlying we ALREADY hold is the most
+                # crowded thing available -- a second HOOD put moves with the
+                # first one exactly, not approximately. This used to `continue`
+                # here, exempting it from the penalty entirely on the reasoning
+                # that a name should not be correlated against itself. That is
+                # backwards, and it showed: the agent bought HOOD 99 while
+                # holding HOOD 100 and put 58% of the book into one name.
+                #
+                # Gate 2 only blocks the identical CONTRACT, so different
+                # strikes on one underlying are legitimately allowed -- they
+                # are different risks. But they should have to outrank a
+                # genuinely new name to get funded, not skip the queue.
                 if cand in held_roots:
+                    crowd[cand] = 1.0
                     continue
                 cs = [signal_mod.correlation(rets[cand], rets[h])
                       for h in held_roots if h in rets]
