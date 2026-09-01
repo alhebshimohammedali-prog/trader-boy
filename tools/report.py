@@ -163,6 +163,78 @@ def load(run: Path) -> tuple[list[dict], dict]:
     return records, metrics
 
 
+def load_many(runs: list[Path]) -> tuple[list[dict], dict]:
+    """Merge several run directories into one session.
+
+    A restart starts a new run directory, so a day that survived six of them
+    is scattered across six folders and rendering only the newest shows the
+    last cycle as though it were the whole session. The supervisor restarts on
+    purpose, so this is the normal case rather than an unusual one.
+
+    Cycles are re-numbered in time order because each run counts from 1, and
+    a report with four cycle 1s reads as broken.
+    """
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for run in runs:
+        if not (run / "cycles.jsonl").exists():
+            continue
+        recs, _ = load(run)
+        for r in recs:
+            key = f"{r.get('timestamp')}|{r.get('cycle')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(r)
+    merged.sort(key=lambda r: str(r.get("timestamp") or ""))
+
+    # Scope to one session on one account. Merging every directory swept in
+    # Monday's dev dry runs and the offline fixtures alongside the live
+    # competition cycles -- twelve fills reported against six real positions.
+    # A report that mixes test data with traded data is worse than one that
+    # shows too little, because nothing in it can be trusted without checking.
+    if merged:
+        last = merged[-1]
+        acct = last.get("account")
+        day = str(last.get("timestamp") or "")[:10]
+        merged = [r for r in merged
+                  if r.get("account") == acct
+                  and str(r.get("timestamp") or "")[:10] == day]
+
+    for i, r in enumerate(merged, 1):
+        r["cycle"] = i
+    return merged, aggregate(merged)
+
+
+def aggregate(records: list[dict]) -> dict:
+    """Recompute the session metrics across merged runs, since each run's own
+    metrics.json only covers its own slice."""
+    fills = [r["fill"] for r in records if (r.get("fill") or {}).get("filled_qty")]
+    prem = sum((f.get("fill_price") or 0) * 100 * (f.get("filled_qty") or 0)
+               for f in fills)
+    slips = [f["slippage"] for f in fills
+             if isinstance(f.get("slippage"), (int, float))]
+    waits = [row.get("age", 0) for r in records
+             for row in (r.get("runnable_table") or []) if row.get("selected")]
+    by_ticker: dict[str, int] = {}
+    for f in fills:
+        t = (f.get("symbol") or "")[:4].rstrip("0123456789")
+        by_ticker[t] = by_ticker.get(t, 0) + 1
+    n = len(fills)
+    hhi = sum((v / n) ** 2 for v in by_ticker.values()) if n else 0.0
+    return {
+        "cycles": len(records),
+        "trades": n,
+        "no_trade_cycles": sum(1 for r in records if r.get("no_trade_reason")),
+        "premium_collected_net": round(prem, 2),
+        "distinct_underlyings": len(by_ticker),
+        "herfindahl_concentration": round(hhi, 4),
+        "mean_candidate_wait_cycles": round(sum(waits) / len(waits), 2) if waits else 0.0,
+        "mean_slippage_per_contract": round(sum(slips) / len(slips), 4) if slips else None,
+        "worst_slippage_per_contract": round(min(slips), 4) if slips else None,
+    }
+
+
 def fmt(v) -> str:
     if v is None:
         return "n/a"
@@ -282,8 +354,8 @@ NICE = {
 }
 
 
-def build(run: Path) -> str:
-    records, metrics = load(run)
+def build(run: Path, runs: list[Path] | None = None) -> str:
+    records, metrics = load_many(runs) if runs else load(run)
     traded = sum(1 for r in records if (r.get("fill") or {}).get("filled_qty"))
 
     cards = "".join(
@@ -331,15 +403,31 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("run", nargs="?", help="run directory (default: newest)")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--latest", action="store_true",
+                    help="only the newest run, not the merged session")
     args = ap.parse_args()
 
-    run = Path(args.run) if args.run else newest_run()
-    if run is None or not (run / "cycles.jsonl").exists():
+    if args.run:
+        run, runs = Path(args.run), None
+    else:
+        # Merge every run that has cycles. Restarts split one session across
+        # several directories, and rendering only the newest shows the last
+        # cycle as if it were the whole day.
+        runs = sorted((Path(p).parent for p in
+                       glob.glob(f"{config.RUNS_DIR}/*/cycles.jsonl")),
+                      key=lambda d: d.name)
+        if args.latest and runs:
+            runs = [runs[-1]]
+        run = runs[-1] if runs else None
+
+    if run is None:
         print(f"no run found (looked in {config.RUNS_DIR}/*/cycles.jsonl)")
         return 1
 
     out = Path(args.out) if args.out else run / "report.html"
-    out.write_text(build(run), encoding="utf-8")
+    out.write_text(build(run, runs), encoding="utf-8")
+    if runs and len(runs) > 1:
+        print(f"merged {len(runs)} run directories")
     print(f"wrote {out}")
     return 0
 
