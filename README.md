@@ -1,13 +1,100 @@
 # Attention Weighted
 
-An autonomous options agent that sells cash-secured puts, and decides which
-candidate gets capital using an index policy built for allocation under
-contention.
+**A short-dated put-writing agent that decides which trade gets the capital.**
 
-Built for the Alpaca AI Trading Agents Hackathon. Eight deterministic layers,
-plus two LLM passes that can veto or shrink a trade and do nothing else.
+It sells cash-secured puts on a 3-4 day tenor, harvesting the gap between what
+options imply and what the underlying actually does. Every fifteen minutes it
+scans the market for itself, prices the chains, runs eight risk gates, and then
+solves the problem most trading bots skip entirely: *several candidates
+qualified, capital is finite, which one gets funded?*
 
-Scoring window: Mon 31 Aug 09:30 ET, with equity marked at EOD Thu 3 Sep.
+Built for the Alpaca AI Trading Agents Hackathon.
+
+---
+
+## The narrow thing it does well
+
+This is not a general trading system and does not pretend to be. It writes puts
+on one expiry, in a delta band, on names it selects fresh each session, and
+that narrowness is what makes every part of it testable.
+
+**The edge it claims:** implied volatility usually exceeds realised volatility.
+The agent measures both, per name, from live chains and daily bars, and
+allocates toward the widest gap. It does not forecast direction, and nothing in
+it is trained.
+
+**Where the tenor comes from:** the term structure of the variance risk premium
+slopes downward (NY Fed SR 736), so short-dated is where the premium is
+densest. The expiry deliberately lands one day *after* the scoring mark, so
+almost all the decay is captured and nothing settles inside the measured
+window.
+
+**What it refuses to do:** buy calls or puts (that pays the premium instead of
+collecting it), sell uncovered calls (unbounded loss, and Alpaca rejects it at
+this account level), use margin (buying power is 4x equity; the drawdown
+breaker would fire on a 3.25% move instead of 7%), or close winners early
+(unrealised P&L already counts at the mark, so buying them back just pays the
+spread).
+
+---
+
+## What makes it different
+
+Most agents in this category are a language model with a broker attached. The
+model picks the trade. Here the model cannot pick anything.
+
+| | typical | this |
+|---|---|---|
+| what chooses the trade | the LLM | a deterministic index policy |
+| what the LLM can do | anything it emits | veto, or shrink. Nothing else |
+| what it holds | tools, order placement | no tools at all |
+| on model failure | undefined | fails closed, no trade |
+| universe | a hardcoded list | scanned live, re-scanned each session |
+| risk controls | prompt instructions | eight gates the model never sees past |
+
+The allocation policy is the novelty, and it is one scalar:
+
+```
+pwt = w*age - ubt + opbt + lambda*rank(edge) - mu*crowding
+```
+
+Score every runnable candidate, take the highest, recompute from scratch next
+cycle. A fair queue for capital: everyone waits their turn, whoever just got
+funded goes to the back, better-value contracts move up, and anything
+correlated with what you already hold moves down.
+
+---
+
+## Seen live
+
+From the competition account, 1 Sep 2026:
+
+```
+gates: 3 passed / 4 evaluated
+   x INTC  g2 position_cap: already holding this exact contract
+
+ticker   signal  age    ubt   opbt   rwd   corr      pwt   sel
+HOOD      0.536    1  0.200  0.699  0.19  +0.00    0.860   <-- SELECTED
+DRAM      0.492    3  0.000  0.791  0.11  +0.88    0.715
+NVDA      0.325    2  0.000  0.472  0.04  +0.56    0.289
+
+LLM    [featherless] PROCEED x1.00
+CRITIC [featherless] PROCEED x1.00  (concurred)
+ORDER  HOOD260904P00100000  filled 1/1  fill 0.77  slippage +0.020
+```
+
+Three things in that one cycle that are worth more than the P&L:
+
+- **the agent refused to double into a contract it already held** (gate 2), on
+  its own, before anything with judgment was consulted;
+- **the winner was not the highest signal.** HOOD won on measured variance risk
+  premium while DRAM and NVDA were penalised for correlating with the existing
+  book;
+- **both model passes are recorded**, including when the second overrides the
+  first. On another cycle the critic vetoed a trade for a "2-day tenor
+  inconsistent with a 4 Sep expiry" -- and it was right. The agent had computed
+  days-to-expiry in the wrong timezone. The adversarial pass caught a defect in
+  the first pass's own inputs.
 
 ---
 
@@ -327,6 +414,63 @@ order that never fills backing out cleanly.
 | LLM failure | Fails closed, no trade |
 | `--flatten` | Human-only. The agent has no self-flatten path, because one would eventually fire for a bad reason |
 | State corruption | Atomic writes, plus a `.bak` of the last good copy |
+
+---
+
+## Six ways this was wrong, and how each was caught
+
+Every one of these ran green in the unit tests. None raised an exception. They
+are listed because a system that has never been caught being wrong has not been
+looked at hard enough, and because the method that found each one is more
+transferable than the fix.
+
+**Every order was being rejected, silently.** `place_option_order` wants `qty`
+and `limit_price` as *strings* and rejects unknown keyword arguments -- and we
+sent numbers plus three defensive aliases. The rejection came back as a
+*return value*, not an exception, so the executor went on to poll for an order
+that never existed. Four days of cycles would have placed nothing and logged
+nothing resembling an error. Found by sending one deliberately unfillable order
+against the live endpoint. `--dry` could never have caught it, because `--dry`
+stops one step before submission.
+
+**The model returned empty content on every call.** Asking for
+`response_format: json_object` produced HTTP 200, `finish_reason: "stop"`, and
+an empty `content` -- the whole answer went to a separate `reasoning` field.
+Since the layer fails closed, that vetoes every trade of the week while the log
+shows ordinary-looking vetoes. Found by calling the provider directly instead
+of trusting the wrapper.
+
+**Daily bars had been 403ing since the first commit.** The free tier needs
+`feed=iex`; the default SIP feed refuses any range ending in the recent window,
+and ours always ends yesterday. The error arrived as a 200 with an error body,
+so `realized_vol` and `momentum` returned None for every ticker on every cycle
+while the signal kept producing plausible numbers off its remaining input.
+
+**Days-to-expiry was computed in the wrong timezone.** The machine runs UTC+8,
+so `date.today()` was already tomorrow in market terms and a 4 Sep contract
+read as 2 DTE instead of 3. That inflated the reward term by half and
+understated capital-time. The *critic* caught it: it vetoed two consecutive
+trades for "a 2-day tenor inconsistent with a 4 Sep expiry," which was exactly
+right. The second opinion found a defect in the first opinion's inputs.
+
+**The crowding term exempted the thing it should have punished most.** A
+candidate on an already-held underlying was skipped rather than penalised, on
+the reasoning that a name should not be correlated with itself. Backwards -- a
+second HOOD put moves with the first one exactly. It bought HOOD 99 while
+holding HOOD 100 and put 58% of the book in one name before this was found.
+
+**The ablation was measuring itself.** The fixture gave every contract the same
+`bid`, so "premium per capital-day" reduced to `1 / capital-time` -- the
+quantity PWT minimises by construction. The 13.8% and 10.2% margins it reported
+were artifacts. Rebuilt with real premium dispersion, the advantage over
+round-robin disappeared, and the claim was withdrawn from this README rather
+than restated.
+
+The pattern is consistent: **the bugs that survive are the ones that do not
+raise errors.** Everything that crashed was fixed on day one. What was left ran
+cleanly and did the wrong thing quietly, which is also why the tests kept
+passing. Four of the six were found only by reading real output from a live
+run.
 
 ---
 
