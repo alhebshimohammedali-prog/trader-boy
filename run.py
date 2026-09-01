@@ -42,13 +42,29 @@ async def _scan_universe(mcp, log) -> None:
                                          note=log.note)
     chosen = [r["ticker"] for r in rows[:config.SCAN_TOP]]
 
-    if len(chosen) < config.UNIVERSE_MIN_NAMES:
-        log.note(f"  scan produced {len(chosen)} tradeable names, below "
-                 f"UNIVERSE_MIN_NAMES={config.UNIVERSE_MIN_NAMES}. Keeping the "
-                 f"configured universe.")
+    # Fall back only when the scan finds NOTHING. It used to fall back below
+    # UNIVERSE_MIN_NAMES, on the reasoning that PWT wants several candidates to
+    # arbitrate between -- but that confused two different things. The
+    # configured list is not safer: every name on it goes through the same
+    # gates, every cycle. Falling back does not skip a single risk check, it
+    # just swaps one candidate pool for another that a human typed.
+    #
+    # So if the market offers four tradeable names, four is what the market
+    # offers, and the agent trades them. A thin universe is information, not a
+    # malfunction. The fallback exists for a scan that failed outright, which
+    # is a different thing entirely.
+    if not chosen:
+        log.note("  scan returned nothing (data problem, not a thin market). "
+                 "Falling back to the configured universe.")
         log.note(f"universe ({len(config.UNIVERSE_CANDIDATES)}, configured): "
                  f"{', '.join(config.UNIVERSE_CANDIDATES)}")
         return
+
+    if len(chosen) < config.UNIVERSE_MIN_NAMES:
+        log.note(f"  thin market: {len(chosen)} names cleared the gates, under "
+                 f"the {config.UNIVERSE_MIN_NAMES} PWT prefers. Trading them "
+                 f"anyway -- they passed the same gates the configured list "
+                 f"would have to.")
 
     config.UNIVERSE_CANDIDATES = chosen
     log.note(f"  {len(rejected)} rejected by the gates before ranking")

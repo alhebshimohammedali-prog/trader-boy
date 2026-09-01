@@ -1,0 +1,45 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 33 (max strike $250)
+  scan produced 5 tradeable names, below UNIVERSE_MIN_NAMES=6. Keeping the configured universe.
+universe (11, configured): NVDA, IBM, CVX, PLTR, XOM, PEP, CSCO, DIS, INTC, GM, UBER
+
+========================================================================
+cycle 1  2026-09-01T11:12:36 ET   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 5/6 candidates runnable
+    x GM     g3 liquidity: spread $0.08 / 24% fails both tests
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  INTC      0.699    0   0.000  1.830  0.15  +0.00    1.980   <-- SELECTED
+  UBER      0.449    0   0.000  1.863  0.09  +0.00    1.953   
+  PEP       0.722    0   0.000  1.671  0.27  +0.00    1.941   
+  IBM       0.504    0   0.000  1.407  0.21  +0.00    1.617   
+  PLTR      0.632    0   0.000  1.557  0.03  +0.00    1.587   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is a sound cash-secured short put with a 16.5% delta, well within the 16-30% band, and the 8.4% equity deployment is comfortably below the 25% per-position cap. With 
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The candidate meets all strategy constraints with a 16.5% delta, 8.4% equity deployment, and no portfolio conflicts or data inconsistencies.
+
+  ORDER INTC260904P00084000  status=new  filled 0/1  limit 0.44  fill None  slippage n/a
+  reconcile: no position change
+
+  > INTC was selected as the first trade after GM was filtered out for failing the liquidity spread test. The order for a cash-secured short put on INTC was submitted and is currently pending execution.
