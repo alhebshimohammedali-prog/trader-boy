@@ -192,10 +192,19 @@ else:
 # !! UNVERIFIED -- the dates below were carried into the spec unchecked and
 # may be from a prior-year calendar.
 EARNINGS_EXCLUDED = {
-    "DELL", "PANW", "MDB", "CRDO", "GTLB",
-    "AVGO", "SNOW", "HPE", "NTAP", "AI", "PVH", "FIVE",
-    "LULU", "ZS", "DOCU", "PATH", "ASAN", "GWRE", "IOT",
-    "MDT", "CIEN", "CPB", "TTC", "NIO",
+    # Software and hardware on a Jan/Feb fiscal year, so their Q2 lands in the
+    # last week of August or the first two of September.
+    "DELL", "PANW", "MDB", "CRDO", "GTLB", "AVGO", "SNOW", "HPE", "NTAP",
+    "AI", "ZS", "DOCU", "PATH", "ASAN", "GWRE", "IOT", "CIEN", "S", "ESTC",
+    "SMTC", "COO", "AEO", "SAIC", "VRNT", "PHR", "BOX", "PSTG", "NCNO",
+    "RBRK", "BRZE", "YEXT", "SPWH", "SMAR", "AVAV", "CASY", "OXM",
+    # Retail and consumer on a Jan/Feb year-end, same reason.
+    "PVH", "FIVE", "LULU", "CPB", "TTC", "GME", "CHWY", "DG", "DLTR",
+    "ULTA", "SIG", "ASO", "BBWI", "BURL", "JWN", "M", "KSS", "VSCO",
+    "DKS", "ANF", "GPS", "RL", "TJX", "HRL", "JBL", "UNFI", "SJM",
+    # Assorted others that habitually print in this window.
+    "MDT", "NIO", "TOL", "GEF", "ABM", "PLAB", "REVG", "HQY", "CPRT",
+    "SCS", "MEI", "LOVE", "FCEL", "AZO", "ORCL", "ADBE", "COST", "CRWD",
 }
 
 # --- §1 Macro blackouts (gate 7) ---------------------------------------------

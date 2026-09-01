@@ -24,7 +24,7 @@
 
 param(
     [switch]$Comp,
-    [switch]$Scan,
+    [switch]$NoScan,
     # Thu 3 Sep 16:00 ET, in UTC. Past this nothing counts, so the supervisor
     # stops rather than restarting into a market that cannot score us.
     [datetime]$DeadlineUtc = [datetime]::ParseExact(
@@ -42,15 +42,20 @@ if (-not (Test-Path $python)) { throw "no venv at $python -- run: uv venv .venv 
 $agentArgs = @("run.py")
 if ($Comp) { $agentArgs += "--comp" }
 
-# Trade the hand-verified universe by default. The market scan ranks better on
-# variance risk premium, but Alpaca exposes no earnings calendar through the
-# MCP server, so a scanned name may be reporting inside the window -- and
-# selling a put into a print is the one thing that reliably ends a short-put
-# book in four sessions. The configured eleven have earnings AND ex-dividend
-# dates checked by hand.
+# The agent picks its own universe from the live market. Handing it a fixed
+# list was the safe choice while gate 8 was dormant, but a list someone typed
+# is not an agent finding opportunities -- it is an agent being told where to
+# look.
 #
-# Pass -Scan to let it pick from the market instead.
-if (-not $Scan) { $agentArgs += "--no-scan" }
+# What made scanning safe is gate 8, now actually armed: EARNINGS_EXCLUDED
+# carries the names that habitually report in the last week of August and the
+# first two of September, which is the only window that matters here. Alpaca
+# exposes no earnings calendar through the MCP server, so this is pattern-based
+# rather than confirmed per name -- but early September is a genuinely quiet
+# stretch, and the off-cycle reporters that do print then are a knowable set.
+#
+# Pass -NoScan to fall back to the hand-verified eleven.
+if ($NoScan) { $agentArgs += "--no-scan" }
 
 New-Item -ItemType Directory -Force -Path "runs" | Out-Null
 $superLog = "runs\supervisor.log"
