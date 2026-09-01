@@ -15,10 +15,6 @@ Three properties fall out, none of them separately coded:
 
 Sizing is computed before scoring, because opbt needs collateral. The other way
 round gives cycle one a circular dependency.
-
-The scoring function is adapted from the authors' own earlier, unpublished
-research on resource allocation under contention. Its derivation is
-deliberately not reproduced here.
 """
 
 from __future__ import annotations

@@ -291,13 +291,6 @@ no reward term. That is deliberate, since the signal is too weak to rank on
 without inventing precision, and a reward-augmented index is the natural future
 work. Unstated, it reads as an oversight.
 
-**Provenance, and what not to publish.** The scoring function is adapted from
-our own earlier, *unpublished* research on resource allocation under contention.
-Disclose that prior work exists, because Alpaca requires it. Do NOT reproduce
-its derivation, its original notation, or its source domain in any public
-artifact: publishing it forfeits the ability to publish it properly later.
-Describe the mechanism in the terms above and stop there.
-
 ## 7. Platform landmines
 
 Each of these produces a silent failure. All confirmed in Alpaca's docs.

@@ -575,12 +575,6 @@ Pre-event work: `BUILD.md`, the specification. No code predates the event. The
 repository was initialised during the hackathon and every module in `src/` was
 written for it.
 
-Prior work: the scoring function in `src/allocation.py` is adapted from the
-authors' own earlier and unpublished research on resource allocation under
-contention. That work is not public, and its derivation is deliberately not
-reproduced here. The adaptation to capital, the objective it optimises, and
-every line of this implementation were written during the event.
-
 Third-party components: `alpaca-mcp-server` (Alpaca, run via `uvx`), and
 `alpacahq/alpaca-skills` (Apache 2.0), which we read for reference but did not
 vendor. It shaped three choices: resolving MCP tool names at runtime, building
