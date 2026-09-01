@@ -140,6 +140,37 @@ class Agent:
         record["deployed_pct"] = deployed / acct.equity if acct.equity else 0.0
         record["drawdown"] = self.state.drawdown(acct.equity)
 
+        # Rebuild the allocator's memory from positions the broker reports, if
+        # the state file did not survive.
+        #
+        # ubt is what stops a ticker winning twice in a row, and it lived only
+        # in state.json. Lose that file -- a crash mid-write, a stray delete,
+        # a restart onto a clean checkout -- and the agent forgets which names
+        # already consumed capital while still holding them, so it ranks them
+        # as though they were fresh. The positions were in the account the
+        # whole time; there is no reason to depend on a local file for
+        # something the broker can be asked.
+        #
+        # Only seeds what is MISSING, so a healthy state file always wins: the
+        # real ubt accumulates across cycles and is more accurate than this
+        # one-shot reconstruction from current holdings.
+        if positions and acct.equity > 0:
+            seeded = []
+            for p in positions:
+                if not (p.is_option and p.qty < 0):
+                    continue
+                occ = parse_occ(p.symbol)
+                if occ is None or self.state.ubt(occ.root) > 0:
+                    continue
+                y, mo, d = (int(x) for x in occ.expiry.split("-"))
+                days = max((date(y, mo, d) - now.date()).days, 1)
+                self.state.charge_capital(
+                    occ.root, abs(p.qty) * occ.collateral, acct.equity, days)
+                seeded.append(occ.root)
+            if seeded:
+                self.log.note(f"  state rebuilt from broker positions: "
+                              f"{', '.join(seeded)} (ubt was missing)")
+
         # Gate 5. Halting entries is not enough -- also reduce exposure.
         if record["drawdown"] >= config.DRAWDOWN_LIMIT and not self.state.breaker_tripped:
             self.state.trip_breaker(f"drawdown {record['drawdown']:.2%}")

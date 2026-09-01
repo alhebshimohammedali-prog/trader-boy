@@ -1,0 +1,45 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 37 (max strike $250)
+  27 rejected by the gates before ranking
+universe (6, scanned): INTC, PLTR, HOOD, DRAM, NVDA, MRVL
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 1  2026-09-01T12:50:57 ET   equity $99,939.92   deployed 36%   dd 0.00%
+
+  gates: 4/5 candidates runnable
+    x INTC   g2 position_cap: already holding this exact contract
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  HOOD      0.521    0   0.000  1.277  0.19  +0.00    1.465   <-- SELECTED
+  DRAM      0.390    0   0.000  1.415  0.11  +0.88    1.263   
+  PLTR      0.333    0   0.000  1.049  0.26  +0.43    1.183   
+  MRVL      0.375    0   0.000  0.982  0.04  +0.77    0.788   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is sound with a 19.7% delta and 3 DTE, well within the 16-30 delta band. Portfolio deployment is at 36.4%, leaving ample room under the 85% cap, and there are no macr
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The candidate is within all strategic parameters (delta, DTE, deployment cap) and the first pass correctly identified no specific defects such as spread widening, concentration, or
+
+  ORDER HOOD260904P00099000  status=filled  filled 1/1  limit 0.72  fill 0.73  slippage -0.025
+  reconcile: no position change
+
+  > The agent selected HOOD from five eligible candidates after INTC was excluded for already being held, and both the decision and critique models approved the trade based on its 19.7% delta, 3 days to expiration, and low portfolio deployment. A single contract of HOOD was successfully filled at a price of $0.73.
