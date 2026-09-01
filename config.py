@@ -493,6 +493,22 @@ NARRATE_ENABLED = True
 LLM_EFFORT = "medium"
 LLM_MAX_TOKENS = 4000
 LLM_TIMEOUT_SECONDS = 45
+
+# Consecutive failed cycles before the agent exits so the supervisor can
+# restart it with a fresh connection.
+#
+# Catching every cycle error keeps one bad tick from ending the run, but the
+# MCP connection is opened outside the loop: if the network drops or the
+# server subprocess dies, every later call fails and nothing reconnects. The
+# agent would log "cycle raised" every fifteen minutes for the rest of the
+# week, alive and trading nothing, while keepalive.ps1 sat idle because it
+# only restarts a process that EXITS.
+#
+# Three cycles is 45 minutes of genuine outage before giving up -- long enough
+# that a brief wifi drop or a rate-limit burst rides through on the existing
+# connection, short enough that a real disconnection costs one session hour
+# rather than the remainder of the competition.
+MAX_CONSECUTIVE_FAILURES = 3
 # Fail CLOSED: an error, timeout, or unparseable response means NO TRADE.
 LLM_FAIL_OPEN = False
 

@@ -96,6 +96,7 @@ class Agent:
         # want.
         self.rescan = rescan
         self._scanned_at = None
+        self._consecutive_failures = 0
 
     # -------------------------------------------------------------- cycle --
 
@@ -170,6 +171,33 @@ class Agent:
             if seeded:
                 self.log.note(f"  state rebuilt from broker positions: "
                               f"{', '.join(seeded)} (ubt was missing)")
+
+        # The two risk controls that lived ONLY on disk.
+        #
+        # orders_today caps entries at MAX_ORDERS_PER_DAY, and day_high_water
+        # is what the drawdown breaker measures against. Losing state.json
+        # reset both: the cap started over, and the breaker's reference became
+        # whatever equity happened to be at that moment -- so after a drop it
+        # would measure the drawdown from the bottom and fire late, exactly
+        # when it is most needed. A control that silently weakens on restart is
+        # worse than one that is absent, because the log still claims it.
+        #
+        # Both are answerable from the broker, so neither needs to depend on a
+        # local file surviving.
+        if self.state.orders_today == 0:
+            counted = await self._orders_placed_today(now)
+            if counted:
+                self.state.orders_today = counted
+                self.log.note(f"  daily order count rebuilt from broker: {counted}")
+
+        # last_equity is the previous session's close. If the high-water mark
+        # was lost we cannot recover the intraday peak, but starting from
+        # yesterday's close is the conservative floor -- it can only make the
+        # breaker fire sooner, never later.
+        prior = float(getattr(acct, "last_equity", 0) or 0)
+        if prior > self.state.day_high_water:
+            self.state.day_high_water = prior
+            record["high_water_rebuilt"] = prior
 
         # Gate 5. Halting entries is not enough -- also reduce exposure.
         if record["drawdown"] >= config.DRAWDOWN_LIMIT and not self.state.breaker_tripped:
@@ -372,6 +400,31 @@ class Agent:
 
     # ------------------------------------------------------------- helpers --
 
+    async def _orders_placed_today(self, now) -> int:
+        """How many of OUR orders the broker has seen today.
+
+        The daily cap is a risk control and it lived only in state.json, so a
+        restart handed the agent a fresh budget. Counted from the broker
+        instead, filtered to our own client_order_id prefix so a manual order
+        placed in the Alpaca UI does not consume the agent's allowance.
+        """
+        try:
+            orders = await self.mcp.call("orders", status="all", limit=200)
+        except Exception:  # noqa: BLE001
+            return 0
+        if not isinstance(orders, list):
+            return 0
+        today = now.date().isoformat()
+        n = 0
+        for o in orders:
+            coid = str(o.get("client_order_id") or "")
+            created = str(o.get("created_at") or "")
+            if coid.startswith("aw-c") and created[:10] == today:
+                # Reprices share a cycle and are not new entries.
+                if not coid.rstrip("0123456789").endswith("-r"):
+                    n += 1
+        return n
+
     async def _close_largest(self, positions) -> dict:
         """Circuit breaker must reduce exposure, not merely stop adding to it.
 
@@ -519,9 +572,33 @@ class Agent:
                 # are the quotes it would trade at.
                 await self._maybe_rescan(now)
                 await self.run_cycle()
+                self._consecutive_failures = 0
             except Exception as exc:  # noqa: BLE001
                 # A cycle must never kill the run. Log and try again next tick.
+                self._consecutive_failures += 1
                 self.log.cycle({"cycle": self.state.cycle,
                                 "error": f"{type(exc).__name__}: {exc}",
+                                "consecutive_failures": self._consecutive_failures,
                                 "no_trade_reason": "cycle raised"})
+
+                # Catching every cycle error was half a solution. If the
+                # network drops, or the MCP subprocess dies, the connection is
+                # opened OUTSIDE this loop -- so every later call fails and
+                # nothing ever reconnects. The agent then logs "cycle raised"
+                # every fifteen minutes for the rest of the week, alive and
+                # doing nothing, and the supervisor cannot help because it only
+                # restarts a process that EXITS.
+                #
+                # A zombie that looks healthy in the log is the worst outcome
+                # available, so after enough consecutive failures we exit
+                # deliberately and let the supervisor rebuild the connection
+                # from scratch. Recovery is safe: positions, deployment, ubt
+                # and the daily order count all come back from the broker.
+                if self._consecutive_failures >= config.MAX_CONSECUTIVE_FAILURES:
+                    self.log.note(
+                        f"\n{self._consecutive_failures} cycles failed in a row "
+                        f"({type(exc).__name__}). The connection is not coming "
+                        f"back on its own -- exiting so the supervisor can "
+                        f"restart with a fresh one.")
+                    return
             await asyncio.sleep(config.CYCLE_SECONDS)

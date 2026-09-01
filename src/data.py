@@ -135,6 +135,9 @@ class Account:
     options_level: int | None
     status: str | None
     trading_blocked: bool
+    # Previous session's close. Used as the conservative floor for the
+    # drawdown breaker's high-water mark when state.json did not survive.
+    last_equity: float = 0.0
 
     @property
     def tradable(self) -> bool:
@@ -229,6 +232,7 @@ class Data:
             options_level=lvl,
             status=pick(raw, "status"),
             trading_blocked=bool(blocked) and str(blocked).lower() != "false",
+            last_equity=fnum(raw, "last_equity", default=0.0) or 0.0,
         )
 
     async def positions(self) -> list[Position]:
