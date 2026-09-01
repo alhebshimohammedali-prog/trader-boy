@@ -59,3 +59,40 @@ cycle 4  2026-09-01T13:31:58 ET   equity $99,922.84   deployed 78%   dd 0.08%
   NO TRADE: no candidate passed all gates
 
   > No trade was executed in cycle 4 because all five eligible candidates failed the gates, primarily due to the portfolio's deployed capital exceeding the 85% cap or the agent already holding those specific contracts.
+
+========================================================================
+cycle 5  2026-09-01T13:50:17 ET   equity $99,903.84   deployed 78%   dd 0.10%
+
+  gates: 1/5 candidates runnable
+    x INTC   g6 portfolio_cap: deployed 85,900 > 85% cap 84,918; g2 position_cap: already holding thi
+    x HOOD   g6 portfolio_cap: deployed 87,400 > 85% cap 84,918; g2 position_cap: already holding thi
+    x MRVL   g6 portfolio_cap: deployed 97,250 > 85% cap 84,918
+    x PLTR   g6 portfolio_cap: deployed 95,000 > 85% cap 84,918; g2 position_cap: already holding thi
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  DRAM      0.385    3   0.159  0.000  0.15  +1.00   -0.009   <-- SELECTED
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is sound with a tight spread and reasonable premium for the tenor, and the position size is well within the per-position cap. Portfolio deployment is near the 85% cap
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The trade is within all strategic limits, the spread is tight, and the remaining deployment headroom is sufficient to accommodate this position without breaching the 85% cap.
+
+  ORDER DRAM260904P00052500  status=filled  filled 1/1  limit 0.29  fill 0.29  slippage -0.025
+  reconcile: no position change
+
+  > The agent selected DRAM as the only candidate to pass the portfolio and position caps, as the other four eligible tickers were blocked by the 85% deployment limit or existing holdings. A single contract was subsequently filled at 0.29.
+
+========================================================================
+cycle 6  2026-09-01T14:53:15 ET   equity $99,727.82   deployed 83%   dd 0.27%
+
+  gates: 0/5 candidates runnable
+    x INTC   g6 portfolio_cap: deployed 91,150 > 85% cap 84,769; g2 position_cap: already holding thi
+    x HOOD   g6 portfolio_cap: deployed 92,450 > 85% cap 84,769
+    x DRAM   g6 portfolio_cap: deployed 87,950 > 85% cap 84,769
+    x MRVL   g6 portfolio_cap: deployed 102,500 > 85% cap 84,769
+    x PLTR   g6 portfolio_cap: deployed 100,000 > 85% cap 84,769
+  reconcile: opened 1
+
+  NO TRADE: no candidate passed all gates
+
+  > No trade was executed because every candidate failed the portfolio capital gate, as the projected deployed capital exceeded the 85% limit for all five eligible tickers. INTC additionally failed the position gate because the agent already holds that contract.

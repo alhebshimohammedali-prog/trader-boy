@@ -8,7 +8,38 @@ scans the market for itself, prices the chains, runs eight risk gates, and then
 solves the problem most trading bots skip entirely: *several candidates
 qualified, capital is finite, which one gets funded?*
 
-Built for the Alpaca AI Trading Agents Hackathon.
+Built for the Alpaca AI Trading Agents Hackathon, and traded live on a paper
+account for the scored window: 31 Aug to 3 Sep 2026.
+
+```
+python run.py --once --dry     # one cycle, decides everything, sends nothing
+python run.py                  # the live loop, until the Thursday mark
+python tools/selftest.py       # 130 assertions, no network, no credentials
+```
+
+Python 3.11, `uv venv .venv && uv pip install -e .`, then copy `.env.example`
+to `.env` and add Alpaca keys. Full command list under [Running it](#running-it).
+
+---
+
+## How a cycle runs
+
+```mermaid
+flowchart LR
+    A["scan<br/>100 most-active"] --> B["price<br/>batched quotes"]
+    B --> C["collateral cap<br/>strike x 100"]
+    C --> D["option chains<br/>survivors only"]
+    D --> E["8 risk gates<br/>spread, OI, ITM,<br/>earnings, history"]
+    E --> F["PWT allocator<br/>one winner"]
+    F --> G["model<br/>proceed / shrink / veto"]
+    G --> H["critic<br/>veto or shrink only"]
+    H --> I["execute<br/>limit, poll, reprice"]
+    I --> J["reconcile<br/>+ log every cycle"]
+```
+
+The model sits at step 7 of 9, sees one already-vetted candidate, holds no
+tools, and can only make the position smaller or refuse it. Everything that
+selects is deterministic and testable.
 
 ---
 
