@@ -68,6 +68,16 @@ class Scored:
 
 
 def dte(contract: Contract, today) -> int:
+    """Days to expiry. `today` MUST be the ET date, not the machine's.
+
+    The operator's machine runs UTC+8, so date.today() was already tomorrow
+    from the market's point of view and every contract looked a day shorter
+    than it was. A 4 Sep expiry read as 2 DTE on 1 Sep instead of 3, which
+    inflated expected_yield by half, understated capital_time, and had the
+    critic vetoing every candidate for a "2-day tenor inconsistent with a
+    4 Sep expiry" -- correctly spotting an inconsistency the agent had
+    manufactured itself.
+    """
     from datetime import date
 
     y, m, d = (int(x) for x in contract.expiry.split("-"))

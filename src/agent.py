@@ -202,7 +202,7 @@ class Agent:
                 bars = (raw.get(s.ticker) or {}).get("bars") or []
                 hist = signal_mod.empirical_itm_rate(
                     bars, (spot - contract.strike) / spot,
-                    max(allocation.dte(contract, date.today()), 1))
+                    max(allocation.dte(contract, now.date()), 1))
 
             g = gates.evaluate(
                 contract, now=now, equity=acct.equity, spot=spot,
@@ -250,9 +250,9 @@ class Agent:
                     crowd[cand] = max(cs)
 
         winner, scored = allocation.select(runnable, self.state, acct.equity,
-                                           date.today(), edge=edge, crowd=crowd)
+                                           now.date(), edge=edge, crowd=crowd)
         record["runnable_table"] = [s.row() for s in scored]
-        record["dte"] = allocation.dte(winner.contract, date.today())
+        record["dte"] = allocation.dte(winner.contract, now.date())
 
         # 6. The model. One candidate, no tools, veto or shrink only.
         candidate = {
