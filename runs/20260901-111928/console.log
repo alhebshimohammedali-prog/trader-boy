@@ -1,0 +1,45 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 35 (max strike $250)
+  thin market: 5 names cleared the gates, under the 6 PWT prefers. Trading them anyway -- they passed the same gates the configured list would have to.
+  26 rejected by the gates before ranking
+universe (5, scanned): INTC, NFLX, HOOD, DRAM, NVDA
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 1  2026-09-01T11:24:58 ET   equity $100,000.00   deployed 0%   dd 0.00%
+
+  gates: 4/4 candidates runnable
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  INTC      0.563    0   0.000  1.098  0.26  +0.00    1.361   <-- SELECTED
+  DRAM      0.450    0   0.000  1.192  0.11  +0.00    1.305   
+  HOOD      0.650    0   0.000  1.053  0.19  +0.00    1.240   
+  NVDA      0.350    0   0.000  0.716  0.04  +0.00    0.753   
+
+  LLM    [featherless] PROCEED x1.00
+    The candidate is a standard cash-secured put with a 21.5% delta, well within the 16-30% band, and the 8.5% equity deployment is comfortably below the 25% per-position cap. With zer
+  CRITIC [featherless] PROCEED x1.00  (concurred)
+    The candidate is a standard cash-secured put with a 21.5% delta, well within the 16-30% band, and the 8.5% equity deployment is comfortably below the 25% per-position cap, with no 
+
+  ORDER INTC260904P00085000  status=new  filled 0/1  limit 0.6  fill None  slippage n/a
+  reconcile: no position change
+
+  > The agent evaluated five candidates and selected INTC for a cash-secured put after it passed all risk gates and fit within portfolio limits. The order was submitted with a status of "new" and has not yet filled.

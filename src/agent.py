@@ -82,7 +82,8 @@ def pick_contract(chain: list[Contract], spot: float | None) -> tuple[Contract |
 
 
 class Agent:
-    def __init__(self, mcp: AlpacaMCP, log: Logbook, *, place_orders: bool = True):
+    def __init__(self, mcp: AlpacaMCP, log: Logbook, *, place_orders: bool = True,
+                 rescan=None):
         self.mcp = mcp
         self.data = Data(mcp)
         self.exec = Executor(mcp)
@@ -90,6 +91,11 @@ class Agent:
         self.log = log
         self.state = State.load()
         self.place_orders = place_orders
+        # Optional async callable that rebuilds the universe. None means the
+        # universe is fixed, which is what --no-scan and the offline fixtures
+        # want.
+        self.rescan = rescan
+        self._scanned_at = None
 
     # -------------------------------------------------------------- cycle --
 
@@ -430,6 +436,30 @@ class Agent:
 
     # ---------------------------------------------------------------- run --
 
+    async def _maybe_rescan(self, now) -> None:
+        """Rebuild the universe when the old one was chosen under conditions
+        that no longer hold.
+
+        The scan used to run once, at startup. Start the agent before the open
+        and it scanned on after-hours quotes -- where spreads run 25-30% and
+        almost everything fails the liquidity gate -- then traded that thin,
+        badly-priced universe for the rest of the week without ever looking
+        again. The market it picked from was not the market it was trading in.
+
+        So: rescan on the first cycle of every session, and periodically
+        through the day, because which names are worth selling puts on is not
+        a fact you establish once.
+        """
+        if self.rescan is None:
+            return
+        stale = (self._scanned_at is None
+                 or (now - self._scanned_at).total_seconds()
+                 > config.SCAN_REFRESH_SECONDS
+                 or self._scanned_at.date() != now.date())
+        if stale:
+            await self.rescan()
+            self._scanned_at = now
+
     async def run_forever(self) -> None:
         while True:
             now = now_et()
@@ -441,6 +471,9 @@ class Agent:
                 await asyncio.sleep(60)
                 continue
             try:
+                # Only ever while the market is open, so the quotes it ranks on
+                # are the quotes it would trade at.
+                await self._maybe_rescan(now)
                 await self.run_cycle()
             except Exception as exc:  # noqa: BLE001
                 # A cycle must never kill the run. Log and try again next tick.

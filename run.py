@@ -101,13 +101,24 @@ async def main() -> int:
         if mcp.account == "comp":
             log.note("\n*** COMPETITION ACCOUNT: orders here are scored ***\n")
 
-        if config.AUTO_SCAN and not args.no_scan:
-            await _scan_universe(mcp, log)
-        else:
+        scanning = config.AUTO_SCAN and not args.no_scan
+        if not scanning:
             log.note(f"universe ({len(config.UNIVERSE_CANDIDATES)}): "
                      f"{', '.join(config.UNIVERSE_CANDIDATES)}")
 
-        agent = Agent(mcp, log, place_orders=not args.dry)
+        # Handed to the agent rather than run once here, so it can rebuild the
+        # universe at each session open and periodically through the day. A
+        # universe chosen on after-hours quotes is not the market it will be
+        # trading in three hours later.
+        async def _rescan():
+            await _scan_universe(mcp, log)
+
+        agent = Agent(mcp, log, place_orders=not args.dry,
+                      rescan=_rescan if scanning else None)
+
+        # --once has no loop to rescan inside, so do it now.
+        if scanning and (args.once or args.flatten):
+            await _scan_universe(mcp, log)
         try:
             if args.flatten:
                 await agent.flatten()

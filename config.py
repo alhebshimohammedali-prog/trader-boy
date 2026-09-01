@@ -164,6 +164,16 @@ AUTO_SCAN = True
 SCAN_POOL = 100   # screener hard-caps at 100 per call
 SCAN_TOP = 11
 
+# How often to rebuild the universe while the market is open. Also rebuilt on
+# the first cycle of every session regardless, since a universe chosen on
+# yesterday's close is not the market being traded today.
+#
+# The scan takes about 20 seconds against a 15-minute cycle, so this is cheap.
+# Two hours is chosen because what is worth selling puts on changes over a
+# session -- spreads tighten after the open and widen into the close, and a
+# name that failed the liquidity gate at 09:31 often passes by 10:30.
+SCAN_REFRESH_SECONDS = 7200
+
 # Applied here rather than at the list above, because the guard needs
 # TARGET_EXPIRY and UNIVERSE_MIN_NAMES to exist first. Any rejection leaves the
 # hardcoded fallback in place.
