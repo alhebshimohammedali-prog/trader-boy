@@ -1,0 +1,48 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+2026-09-02 16:42 ET - market closed, waiting
+2026-09-02 16:43 ET - market closed, waiting
+2026-09-02 16:44 ET - market closed, waiting
+2026-09-02 16:45 ET - market closed, waiting
+2026-09-02 16:46 ET - market closed, waiting
+2026-09-02 16:47 ET - market closed, waiting
+2026-09-02 16:48 ET - market closed, waiting
+2026-09-02 16:49 ET - market closed, waiting
+2026-09-02 16:50 ET - market closed, waiting
+2026-09-02 16:51 ET - market closed, waiting
+2026-09-02 16:52 ET - market closed, waiting
+2026-09-02 16:53 ET - market closed, waiting
+2026-09-02 16:54 ET - market closed, waiting
+2026-09-02 16:55 ET - market closed, waiting
+2026-09-02 16:56 ET - market closed, waiting
+2026-09-02 16:57 ET - market closed, waiting
+2026-09-02 16:58 ET - market closed, waiting
+2026-09-02 16:59 ET - market closed, waiting
+2026-09-02 17:00 ET - market closed, waiting
+2026-09-02 17:01 ET - market closed, waiting
+2026-09-02 17:02 ET - market closed, waiting
+2026-09-02 17:03 ET - market closed, waiting
+2026-09-02 17:04 ET - market closed, waiting
+2026-09-02 17:05 ET - market closed, waiting
+2026-09-02 17:06 ET - market closed, waiting
+2026-09-02 17:07 ET - market closed, waiting
+2026-09-02 17:08 ET - market closed, waiting
+2026-09-02 17:09 ET - market closed, waiting
+2026-09-02 17:10 ET - market closed, waiting
+2026-09-02 17:11 ET - market closed, waiting
+2026-09-02 17:12 ET - market closed, waiting

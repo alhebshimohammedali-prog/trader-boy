@@ -1,0 +1,43 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 38 (max strike $249)
+  thin market: 4 names cleared the gates, under the 6 PWT prefers. Trading them anyway -- they passed the same gates the configured list would have to.
+  29 rejected by the gates before ranking
+universe (7, scanned): INTC, PLTR, NVDA, SPCX, DRAM, HOOD, NFLX
+  re-added 3 held name(s) absent from the scan: DRAM, HOOD, NFLX
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+  state rebuilt from broker positions: DRAM, HOOD, NFLX (ubt was missing)
+  ~ PLTR260904P00175000 itm: spot 169.69 at/through strike 175.00 (cycle 1/2)
+
+========================================================================
+cycle 5  2026-09-02T14:07:11 ET   equity $99,643.53   deployed 83%   dd 0.36%
+
+  gates: 0/6 candidates runnable
+    x INTC   g6 portfolio_cap: deployed 91,350 > 85% cap 84,697
+    x HOOD   g6 portfolio_cap: deployed 92,850 > 85% cap 84,697
+    x PLTR   g6 portfolio_cap: deployed 99,000 > 85% cap 84,697
+    x DRAM   g3 liquidity: spread $0.06 / 24% fails both tests; g3 min_credit: bid $0.22 < $0.25 floo
+    x SPCX   g6 portfolio_cap: deployed 96,350 > 85% cap 84,697
+    x NVDA   g6 portfolio_cap: deployed 104,750 > 85% cap 84,697
+  reconcile: no position change
+
+  NO TRADE: no candidate passed all gates
+
+  > No trade was executed because all six eligible candidates failed the portfolio cap gate, as adding any of them would push deployed capital above the 85% limit. DRAM additionally failed liquidity and minimum credit tests, but the portfolio cap was the universal blocker for this cycle.

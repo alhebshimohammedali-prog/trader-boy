@@ -1,0 +1,42 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+2026-09-02 16:17 ET - market closed, waiting
+2026-09-02 16:18 ET - market closed, waiting
+2026-09-02 16:19 ET - market closed, waiting
+2026-09-02 16:20 ET - market closed, waiting
+2026-09-02 16:21 ET - market closed, waiting
+2026-09-02 16:22 ET - market closed, waiting
+2026-09-02 16:23 ET - market closed, waiting
+2026-09-02 16:24 ET - market closed, waiting
+2026-09-02 16:25 ET - market closed, waiting
+2026-09-02 16:26 ET - market closed, waiting
+2026-09-02 16:27 ET - market closed, waiting
+2026-09-02 16:28 ET - market closed, waiting
+2026-09-02 16:29 ET - market closed, waiting
+2026-09-02 16:30 ET - market closed, waiting
+2026-09-02 16:31 ET - market closed, waiting
+2026-09-02 16:32 ET - market closed, waiting
+2026-09-02 16:33 ET - market closed, waiting
+2026-09-02 16:34 ET - market closed, waiting
+2026-09-02 16:35 ET - market closed, waiting
+2026-09-02 16:36 ET - market closed, waiting
+2026-09-02 16:37 ET - market closed, waiting
+2026-09-02 16:38 ET - market closed, waiting
+2026-09-02 16:39 ET - market closed, waiting
+2026-09-02 16:40 ET - market closed, waiting
+2026-09-02 16:41 ET - market closed, waiting

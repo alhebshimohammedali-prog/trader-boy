@@ -1,0 +1,47 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 37 (max strike $249)
+  thin market: 3 names cleared the gates, under the 6 PWT prefers. Trading them anyway -- they passed the same gates the configured list would have to.
+  29 rejected by the gates before ranking
+universe (7, scanned): PLTR, NVDA, SPCX, DRAM, HOOD, INTC, NFLX
+  re-added 4 held name(s) absent from the scan: DRAM, HOOD, INTC, NFLX
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 27  2026-09-02T14:39:05 ET   equity $99,664.50   deployed 65%   dd 0.24%
+
+  gates: 4/5 candidates runnable
+    x NVDA   g6 portfolio_cap: deployed 87,250 > 85% cap 84,715
+
+  ticker   signal  age     ubt   opbt   rwd   corr      pwt   sel
+  HOOD      0.477   26   0.297  0.772  0.11  +1.00    2.887   <-- SELECTED
+  INTC      0.367   24   0.507  0.802  0.26  +1.00    2.657   
+  PLTR      0.393   24   0.525  0.648  0.19  +0.42    2.584   
+  SPCX      0.450    0   0.000  0.701  0.04  +0.32    0.642   
+
+  LLM    [featherless] SHRINK x0.50
+    The portfolio already holds two HOOD short puts (strikes 99 and 100) with positive unrealized P&L, and adding a third at strike 101 creates excessive single-ticker concentration. S
+  CRITIC [featherless] SHRINK x0.50  (concurred)
+    The portfolio already holds two HOOD short puts (strikes 99 and 100), and adding a third at strike 101 creates excessive single-ticker concentration in a high-beta name, justifying
+
+  ORDER HOOD260904P00101000  status=new  filled 0/1  limit 0.5  fill None  slippage n/a
+  reconcile: no position change
+
+  > Cycle 27 resulted in a new order for HOOD, selected from five eligible candidates after NVDA failed the portfolio capital cap gate. The decision to execute at half size was driven by the need to mitigate single-ticker concentration risk, as the portfolio already holds two other HOOD short put positions.

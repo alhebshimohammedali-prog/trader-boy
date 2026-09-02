@@ -1,0 +1,30 @@
+72 tools exposed; resolved 13:
+  [ok  ] account              -> get_account_info
+  [ok  ] activities           -> get_account_activities_by_type
+  [ok  ] cancel_order         -> cancel_order_by_id
+  [ok  ] most_active          -> get_most_active_stocks
+  [ok  ] movers               -> get_market_movers
+  [ok  ] option_chain         -> get_option_chain
+  [ok  ] option_snapshot      -> get_option_snapshot
+  [ok  ] order_by_client_id   -> get_order_by_client_id
+  [ok  ] orders               -> get_orders
+  [ok  ] place_option_order   -> place_option_order
+  [ok  ] positions            -> get_all_positions
+  [ok  ] stock_bars           -> get_stock_bars
+  [ok  ] stock_quote          -> get_stock_latest_quote
+
+*** COMPETITION ACCOUNT: orders here are scored ***
+
+
+scanning the market for a universe...
+  pool 100 -> priced 100 -> affordable 39 (max strike $249)
+  thin market: 4 names cleared the gates, under the 6 PWT prefers. Trading them anyway -- they passed the same gates the configured list would have to.
+  29 rejected by the gates before ranking
+universe (7, scanned): INTC, PLTR, NVDA, SPCX, DRAM, HOOD, NFLX
+  re-added 3 held name(s) absent from the scan: DRAM, HOOD, NFLX
+  NOTE: earnings are NOT verified for scanned names. Run with --no-scan to use the hand-checked list instead.
+
+========================================================================
+cycle 26  2026-09-02T14:00:24 ET   equity $0.00   deployed 0%   dd 0.00%
+
+  NO TRADE: cycle raised
