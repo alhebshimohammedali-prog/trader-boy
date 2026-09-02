@@ -15,3 +15,8 @@ attention_weighted.egg-info/
 
 # written by tools/scan.py --write; a run artifact, not source
 universe.json
+
+# Pre-change snapshots taken before applying edits to a live run. They contain
+# a full copy of src/, config.py and state.json, so committing them would both
+# bloat the repo and publish account state twice.
+.backup-*/

@@ -14,8 +14,8 @@ from datetime import date, datetime, timedelta
 
 
 import config
-from src import gates, signal as sig
-from src.allocation import capital_time, select
+from src import exits, gates, signal as sig
+from src.allocation import capital_time, rotation, score_book, select
 from src.data import Contract, parse_occ
 from src.decide import coerce, parse_verdict
 from src.execution import client_order_id, sell_limit_price
@@ -351,12 +351,33 @@ def test_reward():
               abs(expected_yield(unknown, 4) - neutral) < 1e-9)
         check("no bid yields nothing rather than dividing by zero",
               expected_yield(contract("D", 100.0, bid=None), 4) == 0.0)
-        w = config.AGE_WEIGHT
+        w, h = config.AGE_WEIGHT, config.AGE_HALF_CYCLES
+        aged = lambda a: w * h * a / (a + h)  # noqa: E731 - local shorthand
         check("reward is additive in pwt",
-              abs(pwt(3, 0.5, 1.0, 0.3) - (w * 3 - 0.5 + 1.0 + 0.3)) < 1e-9)
-        check("age is weighted, not raw",
-              abs(pwt(10, 0.0, 0.0, 0.0) - w * 10) < 1e-9,
-              "unweighted age outranks eleven wins of consumed capital")
+              abs(pwt(3, 0.5, 1.0, 0.3) - (aged(3) - 0.5 + 1.0 + 0.3)) < 1e-9)
+
+        # age SATURATES. It was the only unbounded term, and by cycle 27 it
+        # contributed 2.70 against a crowding penalty that tops out at 0.30, so
+        # a patient name won no matter how correlated it was with the book.
+        check("age is bounded",
+              pwt(10_000, 0.0, 0.0, 0.0) < w * h + 1e-9,
+              "an unbounded term eventually becomes the whole policy")
+        check("the original slope survives at the point it was calibrated",
+              abs(aged(1) - 0.0909) < 1e-3,
+              "one cycle of waiting must still be worth about one win of ubt")
+
+        # A hard cap would have flattened everything past the ceiling to the
+        # same value, cancelling the term out of the comparison -- which is the
+        # defect this index already had when first_qualified never moved.
+        check("saturation still discriminates past the half-life",
+              pwt(27, 0.0, 0.0, 0.0) > pwt(25, 0.0, 0.0, 0.0),
+              "a hard cap would tie these and delete anti-starvation")
+        check("aging is monotone all the way up",
+              all(pwt(a + 1, 0.0, 0.0, 0.0) > pwt(a, 0.0, 0.0, 0.0)
+                  for a in (0, 1, 5, 10, 25, 50, 200)))
+        check("crowding can now outvote seniority",
+              pwt(27, 0.0, 0.0, 0.0, config.CROWDING_MU) < pwt(27, 0.0, 0.0, config.REWARD_LAMBDA),
+              "the HOOD case: correlation must be able to beat waiting")
 
         # The reward must rank the EDGE when we have it, not the premium. A
         # live scan found the highest-yielding contract in the set was the one
@@ -687,9 +708,194 @@ def test_state():
     check("age accrues while waiting", st.age("AAPL") == 1)
 
 
+def test_held_scoring():
+    print("\nheld-position scoring (age must NOT protect a position from rotation)")
+    st = State()
+    st.cycle = 21
+    st.first_qualified = {"AAPL": 1, "NVDA": 5}
+    st.capital_days_used = {"AAPL": 0.50, "NVDA": 0.20}
+    book = [(contract("AAPL", 226.0), 0.8), (contract("NVDA", 175.0), 0.6)]
+    edge = {"AAPL": 0.30, "NVDA": 0.10}
+
+    scored = score_book(book, st, 100_000.0, date(2026, 9, 3), edge=edge)
+    check("every row flagged held", all(s.held for s in scored))
+    check("sorted weakest first",
+          [s.pwt for s in scored] == sorted(s.pwt for s in scored))
+
+    # The trap this test exists for. charge_capital resets first_qualified on
+    # funding, so for a HELD name `age` counts cycles held -- and pwt ADDS it.
+    # Scored naively, a position becomes harder to displace the longer it is
+    # held, which inverts rotation; and for a decay strategy it also ranks
+    # remaining value upside down, since longer held means LESS premium left.
+    older = State()
+    older.cycle = 61
+    older.first_qualified = dict(st.first_qualified)
+    older.capital_days_used = dict(st.capital_days_used)
+    aged = score_book(book, older, 100_000.0, date(2026, 9, 3), edge=edge)
+    check("40 more cycles held changes no score",
+          all(abs(a.pwt - b.pwt) < 1e-12 for a, b in zip(scored, aged)))
+
+    # ubt must still bite: consuming capital is what pushes an incumbent down.
+    spent = State()
+    spent.cycle = 21
+    spent.first_qualified = dict(st.first_qualified)
+    spent.capital_days_used = {"AAPL": 1.50, "NVDA": 0.20}
+    after = score_book(book, spent, 100_000.0, date(2026, 9, 3), edge=edge)
+    check("more consumed capital lowers the score",
+          next(s.pwt for s in after if s.contract.underlying == "AAPL")
+          < next(s.pwt for s in scored if s.contract.underlying == "AAPL"))
+
+    # Rotation must clear the round trip, not merely win on points: swapping
+    # pays the spread twice, so an unmargined `>` churns the book on noise.
+    cand = select([(contract("XOM", 114.0), 0.7)], st, 100_000.0,
+                  date(2026, 9, 3), edge={"XOM": 0.31})[1]
+    gap = max(cand, key=lambda s: s.pwt).pwt - min(scored, key=lambda s: s.pwt).pwt
+    check("a hair-thin edge does not rotate",
+          rotation(scored, cand, max(gap, 0.0) + 1e-9) is None)
+    pair = rotation(scored, cand, -99.0)
+    check("rotation returns held -> candidate once the margin clears",
+          pair is not None and pair[0].held and not pair[1].held)
+    check("no rotation without both sides",
+          rotation([], cand, 0.0) is None and rotation(scored, [], 0.0) is None)
+
+
+def test_exits():
+    print("\nexits (a claimed control that never fires is worse than none)")
+    # Credit is derived, never stored: sold for C, now worth M, P&L = C - M,
+    # and a short's market_value is reported as -M. Deriving it survives a
+    # restart onto a clean checkout, which is exactly when a position is held
+    # by a process that never opened it.
+    check("credit from a winner", exits.credit_received(-20.0, 24.0) == 44.0)
+    check("credit from a loser", exits.credit_received(-110.0, -66.0) == 44.0)
+    check("credit unknown without both fields",
+          exits.credit_received(None, 5.0) is None
+          and exits.credit_received(-10.0, None) is None)
+
+    def ev(**kw):
+        base = dict(symbol="AAPL260904P00226000", ticker="AAPL", strike=226.0,
+                    spot=260.0, delta=-0.18, market_value=-20.0,
+                    unrealized_pl=24.0, dte=3)
+        base.update(kw)
+        return exits.evaluate(**base)
+
+    check("healthy position fires nothing", ev() is None)
+
+    # An exit is a PURCHASE, and its price is the extrinsic value surrendered.
+    # On a cash-secured put the intrinsic is owed either way -- assignment is
+    # the funded, contracted outcome -- so paying away more time value than the
+    # position ever collected cannot be risk management. These cases are the
+    # PLTR trade that taught it: sold 0.94, bought back 6.55, of which 4.76 was
+    # intrinsic owed anyway and 1.79 was time value handed over to exit a trade
+    # that had earned 0.94.
+    pltr = dict(symbol="PLTR260904P00175000", ticker="PLTR", strike=175.0,
+                spot=170.24, delta=-0.72, market_value=-655.0,
+                unrealized_pl=94.0 - 655.0, dte=2, qty=1)
+    check("ITM but expensive to leave is HELD, not closed",
+          exits.evaluate(**pltr) is None)
+    check("ITM and cheap to leave still closes",
+          ev(spot=225.0, market_value=-140.0, unrealized_pl=100.0 - 140.0)
+          is not None)
+    check("time value exhausted is the one cheap exit",
+          ev(spot=260.0, market_value=-5.0, unrealized_pl=95.0).rule
+          == exits.EXTRINSIC_GONE)
+
+    # The block is restricted to ITM on purpose. An OTM put has no intrinsic,
+    # so its whole mark is the price of risk still outstanding and paying it to
+    # step aside is a real decision. Blocking on extrinsic alone made
+    # loss_multiple unreachable and silently deleted the only rule standing
+    # between a position and a catastrophic run.
+    check("OTM stop-loss survives the extrinsic block",
+          ev(market_value=-110.0, unrealized_pl=-66.0).rule == exits.LOSS_MULTIPLE)
+    check("near the money at 1 DTE is gamma",
+          ev(spot=226.0 * 1.005, dte=1, market_value=-30.0,
+             unrealized_pl=70.0).rule == exits.EXPIRY_GAMMA)
+    check("same cushion with time left does not fire",
+          ev(spot=226.0 * 1.005, dte=3, market_value=-30.0,
+             unrealized_pl=70.0) is None)
+    check("delta past the exit band fires", ev(delta=-0.45).rule == exits.DELTA_DRIFT)
+    check("delta inside the band does not", ev(delta=-0.39) is None)
+    check("unknown delta is not evidence of safety", ev(delta=None) is None)
+    check("2.5x the credit fires while OTM",
+          ev(market_value=-110.0, unrealized_pl=-66.0).rule == exits.LOSS_MULTIPLE)
+    check("2.27x does not", ev(market_value=-100.0, unrealized_pl=-56.0) is None)
+    # ITM with 20 of time value left on a 44 credit: cheap enough to leave, so
+    # it closes -- but on the ITM reason, not extrinsic exhaustion, because 20
+    # is still above EXIT_EXTRINSIC_FLOOR. The distinction is the point: one
+    # says "leaving is cheap", the other says "there is nothing left to earn".
+    check("ITM with modest time value left closes on the ITM reason",
+          ev(spot=220.0, delta=-0.60, market_value=-620.0,
+             unrealized_pl=44.0 - 620.0).rule == exits.ITM)
+
+    # Confirmation: one bad print must never close a good position.
+    st = State()
+    sym = "AAPL260904P00226000"
+    drift = ev(delta=-0.45)
+    check("first cycle only watches",
+          not exits.confirmed(drift, st.note_exit_trigger(sym, True)))
+    check("second consecutive cycle acts",
+          exits.confirmed(drift, st.note_exit_trigger(sym, True)))
+    st.note_exit_trigger(sym, False)
+    check("a clean cycle resets the streak", sym not in st.exit_streak)
+    check("streak restarts at one",
+          not exits.confirmed(drift, st.note_exit_trigger(sym, True)))
+    # ITM alone is no longer urgent -- on a cash-secured put assignment is a
+    # funded outcome, not an emergency. Urgency now means "cheap to leave and
+    # nothing left to earn, with no next cycle worth waiting for".
+    check("ITM alone is no longer urgent",
+          not ev(spot=220.0, dte=1, market_value=-620.0,
+                 unrealized_pl=44.0 - 620.0).urgent)
+    check("urgent bypasses confirmation",
+          exits.confirmed(ev(spot=200.0, dte=1, market_value=-2605.0,
+                             unrealized_pl=44.0 - 2605.0), 1))
+    check("no signal is never confirmed", not exits.confirmed(None, 99))
+
+    # DTE must come from an ET date. The timezone error that once made a 4 Sep
+    # contract read as 2 DTE would here misclassify exactly the 1-DTE positions
+    # the gamma rule exists to catch.
+    check("dte from expiry", exits.dte_from_expiry("2026-09-04", date(2026, 9, 3)) == 1)
+    check("dte floors at zero", exits.dte_from_expiry("2026-09-01", date(2026, 9, 3)) == 0)
+    check("unreadable expiry treated as expiring now",
+          exits.dte_from_expiry("garbage", date(2026, 9, 3)) == 0)
+
+
+def test_breaker_ordering():
+    print("\nbreaker ordering (drawdown must be measured AFTER the high-water rebuild)")
+
+    def cycle(equity, last_equity, fixed):
+        """Mirrors run_cycle: measure, then rebuild the mark, then gate."""
+        st = State()
+        st.session_date = "2026-09-01"
+        st.begin_cycle(datetime(2026, 9, 3, 9, 31), equity)  # new session
+        dd = st.drawdown(equity)
+        if last_equity > st.day_high_water:
+            st.day_high_water = last_equity
+            if fixed:
+                dd = st.drawdown(equity)
+        return dd, dd >= config.DRAWDOWN_LIMIT
+
+    # begin_cycle resets day_high_water to current equity on a new session, so
+    # the drawdown measured before the rebuild is zero BY CONSTRUCTION.
+    stale, _ = cycle(99_627.53, 99_805.53, fixed=False)
+    fresh, _ = cycle(99_627.53, 99_805.53, fixed=True)
+    check("stale reading reports no drawdown", stale == 0.0)
+    check("corrected reading matches the real one", abs(fresh - 0.001784) < 1e-5)
+
+    # The consequence, and the reason this is not cosmetic: on a session that
+    # opens below the previous close the breaker sits out the first cycle.
+    _, fired_stale = cycle(96_000.0, 100_000.0, fixed=False)
+    _, fired_fixed = cycle(96_000.0, 100_000.0, fixed=True)
+    check("stale ordering misses a 4% gap-down open", not fired_stale)
+    check("corrected ordering fires on it", fired_fixed)
+
+    # A session opening ABOVE the previous close must not invent a drawdown.
+    up, fired_up = cycle(101_000.0, 100_000.0, fixed=True)
+    check("gap-up invents no drawdown", up == 0.0 and not fired_up)
+
+
 def main() -> int:
     for fn in (test_occ, test_chain, test_signal, test_allocation, test_reward, test_gates,
-               test_execution, test_decision, test_critique, test_temperature, test_state):
+               test_execution, test_decision, test_critique, test_temperature, test_state,
+               test_held_scoring, test_exits, test_breaker_ordering):
         fn()
     print("\n" + "=" * 60)
     if FAILURES:
