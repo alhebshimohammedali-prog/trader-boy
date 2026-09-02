@@ -336,15 +336,15 @@ class Agent:
                 cap_blocked.append((contract, s.score))
         record["gate_results"] = gate_rows
 
-        # 4c. Rotation: the answer to "I want to trade and I am at the cap".
+        # 4c. Rotation: what to do when a candidate qualifies and the book is full.
         #
         # Without it the agent logs `0/N candidates runnable` for the rest of
         # the week once deployment reaches PORTFOLIO_CAP -- which is exactly
         # what happened from Tuesday afternoon on. PWT already knew how to rank
         # a contract; it had simply never been pointed at the book. Scoring
         # holdings on the same index turns "is this candidate good?" into the
-        # question that matters when capital is scarce: "is it better than the
-        # worst thing I already own, by more than switching costs?"
+        # question that matters when capital is scarce: is it better than the
+        # weakest holding, by more than switching costs?
         if cap_blocked and not self.state.breaker_tripped:
             freed = await self._maybe_rotate(positions, cap_blocked, signals,
                                              raw, record, now, acct.equity)
