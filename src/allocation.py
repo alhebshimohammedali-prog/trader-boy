@@ -40,6 +40,7 @@ class Scored:
     crowding: float = 0.0
     corr: float = 0.0
     selected: bool = False
+    held: bool = False
 
     def row(self) -> dict:
         """One line of the runnable-candidate table (§8). This table is the
@@ -60,6 +61,7 @@ class Scored:
             "crowding": round(self.crowding, 4),
             "pwt": round(self.pwt, 4),
             "selected": self.selected,
+            "held": self.held,
         }
 
 
@@ -162,7 +164,18 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0,
     # about 0.09 of ubt. Unweighted, a single cycle of waiting outranks eleven
     # wins' worth of capital consumed, which is not an index policy, it is
     # round-robin with extra arithmetic.
-    return config.AGE_WEIGHT * age - ubt + opbt + reward - crowding
+    # age SATURATES rather than growing without limit. It was the only
+    # unbounded term here, and by cycle 27 it contributed 2.70 against a
+    # crowding penalty that tops out at 0.30, so a patient name won regardless
+    # of how correlated it was with the book.
+    #
+    # A hard cap would have flattened every name past the ceiling to the same
+    # value, cancelling the term out of the comparison -- the same defect this
+    # index already suffered when first_qualified never moved. The smooth form
+    # keeps the ordering (25 cycles still ranks below 27) while bounding the
+    # total, and preserves the original slope at age 1.
+    aged = config.AGE_WEIGHT * config.AGE_HALF_CYCLES * age / (age + config.AGE_HALF_CYCLES)
+    return aged - ubt + opbt + reward - crowding
 
 
 def select(
@@ -247,3 +260,122 @@ def select(
     winner.selected = True
     scored.sort(key=lambda s: s.pwt, reverse=True)
     return winner, scored
+
+
+def score_book(
+    held: list[tuple[Contract, float]],
+    state: State,
+    equity: float,
+    today,
+    edge: dict[str, float] | None = None,
+) -> list[Scored]:
+    """Score the positions we already hold on the same index as candidates.
+
+    `pwt()` is a pure function of (age, ubt, opbt, reward, crowding). It never
+    cared whether a contract is owned -- `select()` simply never called it on
+    the book. Doing so costs nothing new and answers the one question the agent
+    currently cannot ask: *is a position I hold worse than one I could open?*
+
+    Why this is a completion rather than a feature. The README grounds PWT in
+    Gittins, and a real index policy scores the incumbent alongside the
+    alternatives and drops it when it loses. Ours scored only the alternatives,
+    so an incumbent was immortal until expiry no matter how far its edge decayed
+    -- which is not an index policy, it is an index policy for admissions and a
+    buy-and-hold for everything after.
+
+    Term semantics carry over unchanged, and the carry-over is the point:
+
+      ubt       still collateral-days consumed. A held position has spent them,
+                so ubt is large -> low score. This is the term that already
+                encodes "you have had your turn".
+      opbt      still every OTHER contender's committed resource-time, held and
+                queued alike, so held and candidate rows are directly
+                comparable. Excluding self is as load-bearing here as in
+                select(): include it and the index inverts and starts
+                preferring the largest position.
+      age       deliberately NOT applied, and this one is a trap. Since
+                `charge_capital` resets first_qualified on funding, age means
+                "cycles since this ticker last received capital" -- so for a
+                position we still hold it counts how long we have held it, and
+                pwt ADDS it. Scored naively, a position would become harder to
+                displace the longer it was held, which is the exact opposite of
+                rotation. Worse for this strategy specifically: longer held
+                means closer to expiry means LESS premium left to collect, so
+                the term would rank remaining value upside down.
+                age is an anti-starvation term for candidates WAITING on
+                capital. A funded position is not starving; it has the capital.
+      crowding  also NOT applied, for the neighbouring reason. A held position
+                correlating with the book is mostly correlating with itself,
+                and charging it for that double-counts what ubt already takes.
+
+    Both excluded terms describe a candidate's relationship to the QUEUE, and
+    neither means anything for something already funded. What remains --
+    -ubt + opbt + reward -- decays as a position consumes capital and rises
+    with the edge it still offers, which is exactly the quantity a rotation
+    decision needs.
+
+    `reward` uses the same edge map as `select()`, so a name whose realised vol
+    has caught its implied -- the premium no longer compensating for the
+    movement -- ranks low here exactly as it would as a candidate. That is the
+    signal that a held position has stopped being worth its collateral, and it
+    is already computed every cycle and currently discarded.
+    """
+    if not held:
+        return []
+
+    entries = [(c, sig, dte(c, today)) for c, sig in held]
+    own = {id(c): capital_time(c, equity, d) for c, _s, d in entries}
+    book_total = sum(own.values())
+
+    if edge:
+        vals = {id(c): edge.get(c.underlying) for c, _s, _d in entries}
+    else:
+        vals = {id(c): expected_yield(c, d) for c, _s, d in entries}
+    pool = [v for v in vals.values() if v is not None]
+
+    scored: list[Scored] = []
+    for contract, signal, d in entries:
+        ticker = contract.underlying
+        ubt = state.ubt(ticker)
+        opbt = book_total - own[id(contract)]
+        y = vals[id(contract)]
+        r = rank_within(y, pool) if (y is not None and pool) else 0.5
+        reward = config.REWARD_LAMBDA * r
+        # age is carried on the row for the log -- "cycles held" is worth
+        # reading -- but passed as 0 into the index. See the docstring: for a
+        # funded position the term points the wrong way.
+        scored.append(Scored(contract, signal, state.age(ticker), ubt, opbt,
+                             pwt(0, ubt, opbt, reward, 0.0),
+                             y if y is not None else 0.0, reward,
+                             held=True))
+
+    scored.sort(key=lambda s: s.pwt)  # weakest first: the rotation candidate
+    return scored
+
+
+def rotation(
+    book: list[Scored],
+    candidates: list[Scored],
+    margin: float,
+) -> tuple[Scored, Scored] | None:
+    """The weakest held position and the strongest candidate, if swapping them
+    clears `margin`. Returns None when holding is the better answer.
+
+    The margin is not a tuning knob, it is the round trip. Rotating pays the
+    spread twice -- once to buy the position back, once to sell the new one --
+    so a candidate that merely edges ahead on the index is a worse trade than
+    doing nothing, and an unmargined comparison would churn the book every time
+    two scores crossed. Requiring the gap to exceed the cost of crossing it is
+    what makes this a rotation rule rather than a coin flip with commissions.
+
+    Deliberately returns at most ONE pair per cycle. The daily order cap already
+    bounds churn, but rotating several positions on a single cycle's numbers
+    would act on far more conviction than one snapshot of the book supports.
+    """
+    if not book or not candidates:
+        return None
+    weakest = min(book, key=lambda s: s.pwt)
+    best = max(candidates, key=lambda s: s.pwt)
+    if best.pwt - weakest.pwt <= margin:
+        return None
+    return weakest, best

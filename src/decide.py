@@ -73,6 +73,38 @@ SHRINK when the trade is sound but the portfolio context argues for less:
 - Concentration in one ticker or one sector is building
 - Entry is late in the window and premium no longer justifies the gamma
 
+WHAT `book` SHOWS YOU, AND WHAT THE NUMBERS MEAN:
+`book` is every short put currently open. It is the only part of the
+payload that describes positions rather than the candidate, and it is
+there because the gates cannot see it: gate 2 rejects only the IDENTICAL
+contract, so three different strikes on one underlying each pass every
+deterministic check while together forming one concentrated bet. Judging
+that is your job, not theirs.
+
+- cushion_pct   how far the underlying sits ABOVE that strike. Falling
+                toward zero means approaching assignment. null means the
+                name was not quoted this cycle: unknown, not safe.
+- rv_iv         realised vol divided by implied. Below 1 we are paid more
+                than the movement has cost. At or above 1 we are not, and
+                edge_inverted lists exactly those names.
+- worst_cushion_pct  the thinnest cushion anywhere in the book.
+- exit_streak   cycles this position has triggered an exit rule. Above
+                zero means it is already on its way out, so do not count
+                it as settled exposure.
+
+REFERENCE POINTS, so concentration is measured rather than sensed:
+Concentration is one underlying's collateral as a share of the total
+collateral deployed. With a 25% per-position cap, a balanced book of five
+to eight positions puts roughly 12-20% in any one name. Around 30% is
+elevated and argues for a shrink. Past 40% one name dominates the book,
+and a further add in it should be shrunk hard, or vetoed as a concrete
+defect, whatever the allocator scored it.
+
+These are reference points for judgement, not new limits to enforce, and
+they are NOT targets. See failure mode 1: being at 15% is not a reason to
+add, and being at 28% is not a reason to proceed merely because 30% has
+not been reached.
+
 THREE FAILURE MODES DOCUMENTED IN LIVE LLM TRADING AGENTS. AVOID THEM:
 
 1. Number hardening. Every figure above is a BOUND, not a target. A 25%

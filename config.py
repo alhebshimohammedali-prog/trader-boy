@@ -333,6 +333,30 @@ MONEYNESS_TARGET = 0.021
 # thing that makes it a policy rather than a schedule.
 AGE_WEIGHT = 0.1
 
+# Saturation point for the aging term, in cycles.
+#
+# `age` was the only UNBOUNDED term in the index, and an unbounded term
+# eventually becomes the whole policy. Live on 2 Sep cycle 28: HOOD carried
+# age 27, contributing 0.1 x 27 = 2.70 to a winning score of 2.698, while its
+# crowding penalty -- perfect correlation with two HOOD puts already held --
+# tops out at 0.30. Anti-starvation outvoted diversification nine to one, HOOD
+# won three cycles running, and the book reached 40% in one high-beta name.
+#
+# A hard cap, min(age, N), was the obvious fix and is the WRONG one. With live
+# ages of 25 and 27 both names sit at the ceiling, contribute identically, and
+# the term cancels out of the comparison -- which is exactly the defect this
+# codebase already found and fixed once, when first_qualified never moved and
+# every candidate carried the same age forever. A term that stops
+# discriminating has not been bounded, it has been deleted.
+#
+# So the term saturates smoothly instead: AGE_WEIGHT * AGE_HALF * age /
+# (age + AGE_HALF). Bounded above by AGE_WEIGHT * AGE_HALF = 1.0, monotone in
+# age forever, and with the SAME slope near zero as before -- the first cycle
+# of waiting is still worth 0.091, which is still one win's worth of consumed
+# capital. The published calibration is preserved exactly where it was argued
+# for, and only the runaway tail is removed.
+AGE_HALF_CYCLES = 10
+
 # Penalty on correlation with what the book already holds.
 #
 # ubt stops the allocator doubling into one TICKER and does nothing else, so a
@@ -349,6 +373,22 @@ AGE_WEIGHT = 0.1
 CROWDING_MU = 0.3
 
 REWARD_LAMBDA = 0.3
+
+# How far a candidate must beat the weakest HELD position on the index before
+# the agent rotates capital out of one and into the other.
+#
+# Derived, not tuned. Rotating pays the spread twice -- buy the holding back,
+# then sell the replacement -- and MAX_SPREAD_REL caps each crossing at 20% of
+# mid. In the index's own units that round trip is worth about one
+# REWARD_LAMBDA rank-gap, because reward is the only term denominated in the
+# same thing a spread eats. So the margin is one full lambda: a candidate must
+# be better by more than the entire reward term is worth, not merely better.
+#
+# Set it to 0.0 and the agent churns on noise, swapping whenever two scores
+# cross and paying two spreads for a rank difference smaller than the cost of
+# capturing it. That failure mode is why this is a constant rather than the
+# comparison simply being `>`.
+ROTATION_MARGIN = REWARD_LAMBDA
 
 PER_POSITION_CAP = 0.25
 
@@ -423,7 +463,85 @@ MAX_SPREAD_REL = 0.20  # of mid
 MIN_CREDIT = 0.25
 DRAWDOWN_LIMIT = 0.03  # vs the day's high-water mark, mark-to-market
 
-CONTRACTS_PER_ORDER = 1
+# --- exits (src/exits.py) ----------------------------------------------------
+#
+# Master switch. Off, the agent behaves exactly as it did before this layer
+# existed: entry gates only, no position management, the drawdown breaker as
+# the sole automatic close. Kept as a flag so the layer can be shipped and
+# enabled separately, NOT because off is a reasonable steady state -- a
+# disarmed control that the log still describes is the failure mode this
+# codebase has already been bitten by twice.
+EXITS_ENABLED = True
+
+# Same number as MAX_EMPIRICAL_ITM, and deliberately not a second opinion about
+# it. That was already derived as DELTA_MAX + 0.10 -- the most assignment risk
+# the entry band tolerates, plus a margin. A position past it is one this agent
+# would refuse to open today, which is the whole argument for closing it.
+EXIT_DELTA_MAX = MAX_EMPIRICAL_ITM
+
+# Close when buying the put back costs this multiple of the credit received.
+# 2.5x is the conventional short-premium stop and it is chosen for the shape of
+# the payoff rather than fitted: selling a 0.18-delta put wins small and often,
+# so the losses have to be cut at a small multiple or one of them erases many
+# wins. Tighter than 2x churns on ordinary intraday noise at this delta.
+EXIT_LOSS_MULTIPLE = 2.5
+
+# THE PRICE OF LEAVING, as a multiple of the credit collected.
+#
+# Closing a short put costs intrinsic + extrinsic. On a CASH-SECURED put the
+# intrinsic is owed either way -- the cash is already posted and assignment is
+# the trade we sold -- so the extrinsic is the only part genuinely surrendered,
+# and it is also the only part still decaying in our favour.
+#
+# 1.0 says: never pay away more time value than the position ever earned. That
+# is not tuned, it is the point where an exit stops being risk management and
+# becomes a losing trade of its own. Every rule below EXIT_* is a reason to
+# WANT out; none of them is a reason to overpay for it.
+#
+# Set after the first version of this layer bought back a PLTR 175 put for 6.55
+# that had been sold for 0.94 -- 4.76 of that was intrinsic it owed anyway, and
+# 1.79 was time value surrendered to exit a trade that had ever collected 0.94.
+EXIT_MAX_EXTRINSIC_GIVEUP = 1.0
+
+# Below this share of the credit the contract has stopped paying us to hold it:
+# the decay we sold has been collected, buying it back costs little beyond the
+# intrinsic already owed, and closing releases the collateral. The one exit that
+# is cheap in the units that actually matter.
+EXIT_EXTRINSIC_FLOOR = 0.15
+
+# Inside this many days to expiry, gamma rather than vega is the live risk:
+# delta moves fastest, and the mark can swing on a move too small to trip any
+# other rule. 1 covers the final session, which is the only one that matters
+# for a book written on a Friday expiry.
+EXIT_GAMMA_DTE = 1
+EXIT_GAMMA_CUSHION = MONEYNESS_MIN  # the agent's own "too close to the money"
+
+# Consecutive cycles a non-urgent trigger must hold before acting, so a single
+# bad print cannot close a good position. Two is the smallest number that is
+# still a confirmation; at a 15-minute cycle it costs at most one cycle of delay
+# on a rule that was, by construction, not urgent.
+EXIT_PERSIST_CYCLES = 2
+
+CONTRACTS_PER_ORDER = 1  # floor; MAX_CONTRACTS_PER_ORDER is the ceiling
+
+# Size is chosen per trade rather than fixed at one contract.
+#
+# At a hard 1 the model's only sizing lever was inert: max(1, int(1*0.5)) is
+# still 1, so SHRINK x0.50 changed nothing. Seen live on 2 Sep cycles 27 AND
+# 28, where both passes shrank a third and fourth HOOD put for concentration,
+# were right both times, and the agent bought full size anyway. A judgment
+# layer whose verdict cannot reach the order is decoration.
+#
+# The ceiling stays low because the edge is small and the tail is not: this
+# sells 0.18-delta puts for pennies against a strike-sized downside, so the
+# right answer to a good setup is a slightly larger position, never a bold one.
+MAX_CONTRACTS_PER_ORDER = 3
+
+# Where size steps up, on the candidate's rank in measured variance risk
+# premium -- the allocator's own `reward` term, read off the quote rather than
+# forecast. Nothing fitted; a monotone map from an existing measurement to size.
+SIZE_EDGE_FLOOR = 0.40   # below this rank, always the minimum
+SIZE_EDGE_STRONG = 0.75  # at or above, allow the ceiling
 
 # Runaway guard, not a strategy constraint. The 60% portfolio cap allows about
 # three concurrent positions, so a normal day is a handful of orders. If we
@@ -473,6 +591,38 @@ MOMENTUM_LOOKBACK_DAYS = 5
 LIMIT_OFFSET_FROM_BID = 0.00  # 0.00 = at bid; negative = through it
 ORDER_TIMEOUT_SECONDS = 90  # cancel + re-price if unfilled
 MAX_REPRICE_ATTEMPTS = 2
+
+# Hard ceiling on a single MCP tool call, in seconds.
+#
+# `session.call_tool` had no timeout, so a wedged server blocked the cycle
+# forever. Seen live on 2 Sep: the agent sat inside one cycle for 26 minutes
+# and the supervisor could not help, because -- as run_forever's own comment
+# says -- it "only restarts a process that EXITS". A hang raises nothing, so
+# MAX_CONSECUTIVE_FAILURES never counted and nothing recovered.
+#
+# 60s is far above any healthy call here (quotes and chains return in under a
+# second) and far below the 900s cycle, so it can only fire on a genuine stall.
+# Where closed trades are recorded. Overridable so the test suites cannot
+# write production history -- selftest and scenarios drive the REAL agent, and
+# an unconfigurable path meant running them appended fake closes to the live
+# ledger. That is the same defect that let those suites overwrite state.json.
+LEDGER_PATH = "runs/ledger.jsonl"
+
+MCP_CALL_TIMEOUT = 60
+
+# Consecutive timeouts before the connection is declared dead.
+#
+# A timeout alone is not enough to trigger recovery: data.spot, put_chain and
+# _orders_placed_today all catch Exception and degrade gracefully, which is
+# right for one bad quote and wrong for a dead server. Swallowed, every call
+# times out, every cycle completes with no data, and the log reads "no
+# candidate passed all gates" all week -- the same zombie in a new costume.
+#
+# So the client counts consecutive timeouts and the cycle loop checks it, which
+# completes the recovery path that already exists: exit deliberately, let the
+# supervisor rebuild the connection from scratch. 5 tolerates a slow patch
+# without tolerating a stall.
+MCP_MAX_CONSECUTIVE_TIMEOUTS = 5
 
 
 # --- §5 step 6 LLM -----------------------------------------------------------

@@ -23,6 +23,29 @@ from src.logbook import Logbook
 from src.mcp_client import AlpacaMCP
 
 
+async def _held_roots(mcp) -> list[str]:
+    """Underlyings of the short option positions currently open, in order.
+
+    Never raises, for the same reason `universe.scan` never raises: a universe
+    is not worth a session. If the broker call fails we lose visibility on held
+    names for this scan, which is bad -- but losing the whole universe would be
+    worse, and the next rescan gets another attempt.
+    """
+    from src.data import Data, parse_occ
+
+    roots: list[str] = []
+    try:
+        for p in await Data(mcp).positions():
+            if not (p.is_option and p.qty < 0):
+                continue
+            occ = parse_occ(p.symbol)
+            if occ is not None and occ.root not in roots:
+                roots.append(occ.root)
+    except Exception:  # noqa: BLE001 - deliberately total; see docstring
+        return []
+    return roots
+
+
 async def _scan_universe(mcp, log) -> None:
     """Replace the configured universe with one built from the live market.
 
@@ -66,9 +89,29 @@ async def _scan_universe(mcp, log) -> None:
                  f"anyway -- they passed the same gates the configured list "
                  f"would have to.")
 
+    # Names we HOLD stay in the universe whether or not they are still
+    # most-active, because the universe is not only the shopping list -- it is
+    # also the only thing the signal layer computes over. A held name that
+    # drops out of the scan gets no iv, no rv_iv, no momentum and no re-solved
+    # delta that cycle, so the agent stops measuring a position it still owns.
+    #
+    # Seen live on 2 Sep: the scan returned INTC, PLTR, DRAM, NVDA while the
+    # book was HOOD, INTC, NFLX, DRAM, PLTR. Two of five positions were not
+    # merely unmanaged, they were unobserved.
+    #
+    # This adds no new risk of doubling up: gate 2 still rejects a contract we
+    # already hold, and the crowding term still penalises a second position on
+    # the same underlying. It only restores visibility.
+    held = await _held_roots(mcp)
+    readded = [r for r in held if r not in chosen]
+    chosen = chosen + readded
+
     config.UNIVERSE_CANDIDATES = chosen
     log.note(f"  {len(rejected)} rejected by the gates before ranking")
     log.note(f"universe ({len(chosen)}, scanned): {', '.join(chosen)}")
+    if readded:
+        log.note(f"  re-added {len(readded)} held name(s) absent from the scan: "
+                 f"{', '.join(readded)}")
 
     # Said plainly every run, because it is the one risk the scan cannot see.
     # Alpaca exposes no earnings calendar through this server, so a scanned

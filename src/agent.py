@@ -13,7 +13,7 @@ from datetime import date, datetime
 from typing import Any
 
 import config
-from src import allocation, gates, signal as signal_mod
+from src import allocation, exits, gates, ledger, signal as signal_mod
 from src.data import Contract, Data, parse_occ
 from src.decide import combine, critique, decide, narrate
 from src.execution import Executor
@@ -118,6 +118,25 @@ class Agent:
         if delta.assigned:
             self.log.note(f"  !! assignment detected on {', '.join(delta.assigned)}")
 
+        # Anything that left the book without us buying it back: expiry,
+        # assignment, or a manual close. Recorded from the LAST mark we saw,
+        # and labelled an estimate, because there is no exit fill to measure
+        # against. Agent-initiated closes below record the real number.
+        for sym, prior in (delta.closed_positions or {}).items():
+            if not (prior.is_option and prior.qty < 0):
+                continue
+            occ = parse_occ(sym)
+            if occ is None:
+                continue
+            ledger.record_close(
+                symbol=sym, ticker=occ.root, strike=occ.strike,
+                expiry=occ.expiry, qty=int(abs(prior.qty)),
+                closed_by=ledger.VANISHED, cycle=self.state.cycle,
+                last_unrealized_pl=prior.unrealized_pl,
+                dte=exits.dte_from_expiry(occ.expiry, now.date()),
+                note=("assigned" if occ.root in delta.assigned
+                      else "expired or closed outside the agent"))
+
         deployed = 0.0
         unparsed: list[str] = []
         for p in positions:
@@ -198,6 +217,20 @@ class Agent:
         if prior > self.state.day_high_water:
             self.state.day_high_water = prior
             record["high_water_rebuilt"] = prior
+            # Recompute against the mark we just corrected. `drawdown` was
+            # measured near the top of this method, while day_high_water was
+            # still whatever begin_cycle() reset it to -- on the first cycle of
+            # a session that is current equity, which makes the drawdown zero by
+            # construction. Leaving the stale figure lets the gate below test
+            # 0.0 on exactly the cycle this rebuild exists to protect: a session
+            # that opens BELOW the previous close.
+            #
+            # Seen live, cycle 10 on 2 Sep -- drawdown logged as 0.0 alongside
+            # high_water_rebuilt 99,805.53 at equity 99,627.53, a true drawdown
+            # of 0.18% reported as none. Harmless at that size. On a gap-down
+            # open the breaker would sit out the first cycle of the day and fire
+            # fifteen minutes late, which is the one morning it matters.
+            record["drawdown"] = self.state.drawdown(acct.equity)
 
         # Gate 5. Halting entries is not enough -- also reduce exposure.
         if record["drawdown"] >= config.DRAWDOWN_LIMIT and not self.state.breaker_tripped:
@@ -208,8 +241,6 @@ class Agent:
 
         if not acct.tradable:
             return await self._finish(record, "account not tradable (level/blocked/equity)")
-        if now > config.ENTRY_CUTOFF:
-            return await self._finish(record, "past entry cutoff; managing only")
 
         # 3. Signal.
         raw: dict[str, dict] = {}
@@ -236,12 +267,35 @@ class Agent:
         record["signals"] = [s.row() for s in signals]
         record["eligible"] = [s.ticker for s in eligible]
 
+        # 4a. Manage what we already hold.
+        #
+        # Placed HERE, above every early return below it, because each of those
+        # returns skips position management while claiming to do something else.
+        # "past entry cutoff; managing only" managed nothing at all -- it
+        # returned immediately -- so between the Thursday cutoff and the mark
+        # the agent sat inert on a book of 1-DTE short puts, which is the exact
+        # window where gamma makes management matter most. "no ticker cleared
+        # the signal floor" had the same effect for a different reason: a quiet
+        # market silenced the exits too.
+        closed = await self._manage_book(positions, chains, record, now.date())
+        if closed:
+            # Entries wait a cycle. The gates below were about to be evaluated
+            # against a deployed-capital figure that this close just changed,
+            # and re-deriving it mid-cycle is more moving parts than the fifteen
+            # minutes are worth.
+            return await self._finish(
+                record, f"closed {closed} position(s); entries resume next cycle")
+
+        if now > config.ENTRY_CUTOFF:
+            return await self._finish(record, "past entry cutoff; managing only")
+
         if not eligible:
             return await self._finish(record, "no ticker cleared the signal floor")
 
         # 4. Gates -- before the model sees anything.
         held = {p.symbol for p in positions if p.is_option}
         runnable: list[tuple[Contract, float]] = []
+        cap_blocked: list[tuple[Contract, float]] = []
         gate_rows: list[dict] = []
         for s in eligible:
             spot = raw[s.ticker]["spot"]
@@ -274,7 +328,29 @@ class Agent:
             if g.passed:
                 self.state.mark_qualified(s.ticker)
                 runnable.append((contract, s.score))
+            elif all(n == 6 for n, _name, _why in g.failures):
+                # Rejected ONLY because the book is full: not a bad trade, an
+                # unaffordable one. Everything else about it passed, which is
+                # what makes rotation a legitimate question rather than a way
+                # of talking ourselves past a gate.
+                cap_blocked.append((contract, s.score))
         record["gate_results"] = gate_rows
+
+        # 4c. Rotation: the answer to "I want to trade and I am at the cap".
+        #
+        # Without it the agent logs `0/N candidates runnable` for the rest of
+        # the week once deployment reaches PORTFOLIO_CAP -- which is exactly
+        # what happened from Tuesday afternoon on. PWT already knew how to rank
+        # a contract; it had simply never been pointed at the book. Scoring
+        # holdings on the same index turns "is this candidate good?" into the
+        # question that matters when capital is scarce: "is it better than the
+        # worst thing I already own, by more than switching costs?"
+        if cap_blocked and not self.state.breaker_tripped:
+            freed = await self._maybe_rotate(positions, cap_blocked, signals,
+                                             raw, record, now, acct.equity)
+            if freed:
+                return await self._finish(
+                    record, f"rotated out of {freed}; entry resumes next cycle")
 
         if not runnable:
             return await self._finish(record, "no candidate passed all gates")
@@ -327,6 +403,13 @@ class Agent:
         record["dte"] = allocation.dte(winner.contract, now.date())
 
         # 6. The model. One candidate, no tools, veto or shrink only.
+        #
+        # Logged as well as sent, because a verdict is only auditable next to
+        # what the model was actually shown. Without this the record proves the
+        # model said proceed and not what it had to go on.
+        book_context = self._book_context(positions, signals, raw, now.date())
+        record["book"] = book_context
+
         candidate = {
             "ticker": winner.contract.underlying,
             "contract": {
@@ -341,7 +424,23 @@ class Agent:
             "sizing": {"collateral": winner.contract.collateral,
                        "pct_equity": winner.contract.collateral / acct.equity},
             "portfolio": {"equity": acct.equity, "deployed_pct": record["deployed_pct"],
-                          "open_positions": len(held)},
+                          "open_positions": len(held),
+                          "drawdown": record["drawdown"]},
+            # What we already hold, and how close each of it is to trouble.
+            #
+            # Until now the model saw `open_positions: 5` -- a count -- and
+            # nothing else about the book. That is the reason it approved every
+            # one of its first 21 live decisions at full size: given a single
+            # pre-vetted candidate and no portfolio context, it had no
+            # information the gates did not already have, so there was nothing
+            # for it to disagree with.
+            #
+            # These are the numbers the gates compute per-name and never
+            # combine. Four positions each individually inside their limits, all
+            # drifting the same way on the same sector, is a book-level fact no
+            # single gate can see and the one thing a judgment layer is
+            # genuinely better at than a threshold.
+            "book": book_context,
             # Only decision-relevant time deltas -- deliberately NOT the wall
             # clock or the cycle number. Live-agent research documents "cadence
             # trading", where a model reads its own polling interval as a
@@ -367,11 +466,42 @@ class Agent:
             verdict = combine(verdict, second)
         record["decision"] = verdict.row()
 
+        # What would have happened with no model in the path.
+        #
+        # Everything ahead of this point is deterministic: the gates admitted
+        # the candidate and the allocator selected it, so the no-model outcome
+        # is precisely "trade it, at full size". Recording that alongside the
+        # verdict turns the model's contribution into a number we can count
+        # instead of an assumption we restate.
+        #
+        # It is written on EVERY decision, including the ones where nothing
+        # changed, because "the model agreed" is only evidence if the cycles
+        # where it disagreed were counted the same way. Across the first 21
+        # live decisions this layer approved every candidate at full size and
+        # altered nothing -- which is a fact about the seat it was sitting in,
+        # not about the model, and it took counting to see it.
+        record["counterfactual"] = {
+            "without_model": {"action": "proceed", "size_multiplier": 1.0},
+            "with_model": {"action": verdict.action,
+                           "size_multiplier": verdict.size_multiplier},
+            "changed": (not verdict.approved) or verdict.size_multiplier != 1.0,
+            "changed_by": ("critic" if second is not None
+                           and record.get("critique", {}).get("action")
+                           != record.get("first_pass", {}).get("action")
+                           else "primary"),
+        }
+
         if not verdict.approved:
             return await self._finish(record, f"LLM {verdict.action}: {verdict.reasoning[:160]}")
 
         # 8. Execution.
-        qty = max(1, int(config.CONTRACTS_PER_ORDER * verdict.size_multiplier))
+        qty = self._size_for(winner, acct.equity, verdict.size_multiplier, deployed)
+        record["sizing"] = {
+            "edge_rank": round(winner.reward / config.REWARD_LAMBDA, 3)
+            if config.REWARD_LAMBDA else None,
+            "model_multiplier": verdict.size_multiplier,
+            "qty": qty,
+        }
         if not self.place_orders:
             return await self._finish(record, "dry run: order not submitted")
 
@@ -382,6 +512,16 @@ class Agent:
                 record,
                 f"daily order cap reached ({self.state.orders_today}); "
                 "something is looping -- entries halted")
+
+        # A resting sell on this exact contract means we already asked for this
+        # trade and the market has not taken it yet. Sending another is not a
+        # second decision, it is the same decision twice -- and gate 2 cannot
+        # see it, because a working order is not a position.
+        if winner.contract.symbol in await self._working_orders("sell"):
+            return await self._finish(
+                record,
+                f"order already working on {winner.contract.symbol}; "
+                "not duplicating it")
 
         self.state.orders_today += 1
         fill = await self.exec.sell_put(winner.contract, self.state.cycle, qty)
@@ -425,6 +565,372 @@ class Agent:
                     n += 1
         return n
 
+    def _book_context(self, positions, signals, raw: dict, today) -> dict:
+        """Compact book-level risk for the model's payload. Pure, no calls.
+
+        Every number here was already computed this cycle: spot from the signal
+        layer's own quote, rv_iv from the signal, strike and expiry off the OCC
+        symbol, P&L off the position. The model was simply never shown any of
+        it.
+
+        `worst_cushion` is the summary line. A book can satisfy every
+        per-position gate and still be one bad morning from all of it going ITM
+        together, which is the failure mode that actually ends a short-put book
+        in four sessions.
+        """
+        by_ticker = {s.ticker: s for s in signals}
+        rows: list[dict] = []
+        for p in positions:
+            if not (p.is_option and p.qty < 0):
+                continue
+            occ = parse_occ(p.symbol)
+            if occ is None:
+                continue
+            spot = (raw.get(occ.root) or {}).get("spot")
+            sig = by_ticker.get(occ.root)
+            rows.append({
+                "ticker": occ.root,
+                "strike": occ.strike,
+                "dte": exits.dte_from_expiry(occ.expiry, today),
+                # None, not 0.0: an unquoted name is unknown, not safe. The
+                # same convention the gates use for a null delta.
+                "cushion_pct": (round(exits.cushion(occ.strike, spot) * 100, 2)
+                                if spot else None),
+                "rv_iv": round(sig.rv_iv, 3) if sig and sig.rv_iv is not None else None,
+                "unrealized_pl": p.unrealized_pl,
+                # Already firing an exit rule, so the model knows this position
+                # is on its way out rather than treating it as settled exposure.
+                "exit_streak": self.state.exit_streak.get(p.symbol, 0),
+            })
+
+        cushions = [r["cushion_pct"] for r in rows if r["cushion_pct"] is not None]
+        return {
+            "positions": rows,
+            "worst_cushion_pct": min(cushions) if cushions else None,
+            "unquoted": sum(1 for r in rows if r["cushion_pct"] is None),
+            # Names whose realised vol has caught or passed implied: we are no
+            # longer being paid for the risk we are carrying on them.
+            "edge_inverted": [r["ticker"] for r in rows
+                              if r["rv_iv"] is not None and r["rv_iv"] >= 1.0],
+        }
+
+    async def _maybe_rotate(self, positions, cap_blocked, signals, raw, record,
+                            now, equity) -> str | None:
+        """Free capital by closing the worst holding, if a candidate earns it.
+
+        At most ONE per cycle. The daily order cap bounds churn, but rotating
+        several holdings on a single snapshot would act on far more conviction
+        than one cycle of numbers supports.
+
+        Four things must all hold, and each removes a different way this could
+        be a bad trade:
+
+        1. The candidate beats the weakest holding on PWT by more than
+           ROTATION_MARGIN. Switching pays the spread twice, so a candidate
+           that merely edges ahead is a worse trade than doing nothing.
+        2. Leaving is CHEAP in extrinsic terms -- the same test that stops the
+           exit layer overpaying. Rotation is still an exit, and one that
+           surrenders more time value than the position ever earned destroys
+           value however attractive the replacement looks.
+        3. The freed collateral actually funds the candidate. Closing a $5,250
+           DRAM put does not pay for a $21,500 NVDA one, and rotating into
+           something still unaffordable is a realised loss with extra steps.
+        4. Nothing is already working on that contract, and the daily order
+           cap has room.
+        """
+        edge = {x.ticker: x.iv - x.realized_vol for x in signals
+                if x.iv is not None and x.realized_vol is not None} or None
+
+        book: list[tuple[Contract, float]] = []
+        meta: dict[str, Any] = {}
+        for pos in positions:
+            if not (pos.is_option and pos.qty < 0):
+                continue
+            occ = parse_occ(pos.symbol)
+            if occ is None:
+                continue
+            c = Contract(symbol=pos.symbol, underlying=occ.root,
+                         strike=occ.strike, expiry=occ.expiry)
+            book.append((c, 0.0))
+            meta[pos.symbol] = (pos, (raw.get(occ.root) or {}).get("spot"))
+        if not book:
+            return None
+
+        held_scored = allocation.score_book(book, self.state, equity,
+                                            now.date(), edge=edge)
+        cand_scored = allocation.select(cap_blocked, self.state, equity,
+                                        now.date(), edge=edge)[1]
+        record["rotation"] = {"book": [x.row() for x in held_scored],
+                              "against": [x.row() for x in cand_scored],
+                              "margin": config.ROTATION_MARGIN}
+
+        pair = allocation.rotation(held_scored, cand_scored,
+                                   config.ROTATION_MARGIN)
+        if pair is None:
+            record["rotation"]["outcome"] = "held: nothing cleared the margin"
+            return None
+
+        weakest, best = pair
+        pos, spot = meta[weakest.contract.symbol]
+        qty = int(abs(pos.qty))
+
+        credit = exits.credit_received(pos.market_value, pos.unrealized_pl)
+        intr = exits.intrinsic_value(weakest.contract.strike, spot, qty)
+        mark = abs(pos.market_value) if pos.market_value is not None else None
+        extr = exits.extrinsic_value(mark, intr)
+        if (intr is not None and intr > 0 and extr is not None and credit
+                and extr > config.EXIT_MAX_EXTRINSIC_GIVEUP * credit):
+            record["rotation"]["outcome"] = (
+                f"held {weakest.contract.underlying}: leaving surrenders "
+                f"{extr:.0f} of time value on a {credit:.0f} credit")
+            self.log.note("  rotation declined: leaving "
+                          f"{weakest.contract.symbol} costs more time value "
+                          "than it ever earned")
+            return None
+
+        freed = weakest.contract.collateral * qty
+        if freed < best.contract.collateral:
+            record["rotation"]["outcome"] = (
+                f"held: freeing {freed:,.0f} does not fund "
+                f"{best.contract.underlying} at {best.contract.collateral:,.0f}")
+            return None
+        if weakest.contract.symbol in await self._working_orders("buy"):
+            record["rotation"]["outcome"] = "held: a close is already working"
+            return None
+        if self.state.orders_today >= config.MAX_ORDERS_PER_DAY:
+            record["rotation"]["outcome"] = "held: daily order cap reached"
+            return None
+
+        self.log.note(
+            f"  ROTATE {weakest.contract.underlying} (pwt {weakest.pwt:+.3f}) "
+            f"-> {best.contract.underlying} (pwt {best.pwt:+.3f}), "
+            f"frees {freed:,.0f}")
+        self.state.orders_today += 1
+        f = await self.exec.buy_to_close(weakest.contract.symbol, qty,
+                                         self.state.cycle)
+        record["rotation"]["outcome"] = {
+            "closed": weakest.contract.symbol, "for": best.contract.symbol,
+            "status": f.status, "filled": f.filled_qty,
+            "pwt_gap": round(best.pwt - weakest.pwt, 4)}
+        if not f.filled_qty:
+            return None
+        self.state.forget_position(weakest.contract.symbol)
+        ledger.record_close(
+            symbol=weakest.contract.symbol, ticker=weakest.contract.underlying,
+            strike=weakest.contract.strike, expiry=weakest.contract.expiry,
+            qty=qty, closed_by=ledger.CLOSED_BY_ROTATION,
+            rule=f"rotated_for_{best.contract.underlying}",
+            cycle=self.state.cycle, credit=credit,
+            exit_cost=(f.fill_price * 100.0 * qty
+                       if f.fill_price is not None else None),
+            spot=spot,
+            dte=exits.dte_from_expiry(weakest.contract.expiry, now.date()),
+            note=f"pwt gap {best.pwt - weakest.pwt:+.4f}")
+        return weakest.contract.symbol
+
+    def _size_for(self, winner, equity: float, model_multiplier: float,
+                  deployed: float) -> int:
+        """Contracts to sell: conviction first, then the model, then the caps.
+
+        Conviction is the candidate's rank on measured variance risk premium --
+        the allocator's own `reward` term, read off the quote rather than
+        forecast. More edge per contract is the only honest argument for more
+        contracts.
+
+        The model then scales DOWN and can never scale up: the safety story is
+        that a confused model costs a trade we skipped, never a trade we
+        oversized. At a fixed one contract this lever did nothing, so a SHRINK
+        verdict was silently discarded twice on 2 Sep.
+        """
+        rank = (winner.reward / config.REWARD_LAMBDA) if config.REWARD_LAMBDA else 0.5
+        if rank >= config.SIZE_EDGE_STRONG:
+            base = config.MAX_CONTRACTS_PER_ORDER
+        elif rank >= config.SIZE_EDGE_FLOOR:
+            base = max(config.CONTRACTS_PER_ORDER, config.MAX_CONTRACTS_PER_ORDER - 1)
+        else:
+            base = config.CONTRACTS_PER_ORDER
+        qty = max(config.CONTRACTS_PER_ORDER, int(base * model_multiplier))
+
+        # Both caps bind last, and BOTH matter.
+        #
+        # Gate 6 validated the portfolio cap against ONE contract's collateral,
+        # because one contract is all it was shown. Sizing above one silently
+        # invalidates that check: three contracts add three times the collateral
+        # the gate approved, and the 85% limit is breached by a path that never
+        # re-examined it. A limit a later step can walk through is not a limit --
+        # the same shape as the defect that let unparseable symbols under-count
+        # deployment.
+        collateral = winner.contract.collateral
+        if collateral > 0 and equity > 0:
+            by_position = int((config.PER_POSITION_CAP * equity) // collateral)
+            room = config.PORTFOLIO_CAP * equity - deployed
+            by_portfolio = int(room // collateral) if room > 0 else 0
+            qty = min(qty, by_position, by_portfolio)
+
+        # Never below one: gate 6 has already proved a single contract fits, so
+        # a floor of one cannot breach a cap that was just checked.
+        return max(1, qty)
+
+    async def _working_orders(self, side: str) -> set[str]:
+        """Contracts with one of OUR orders of `side` still live at the broker.
+
+        Both sides need this and for the same reason: client_order_id embeds the
+        CYCLE, so an order that does not fill inside ORDER_TIMEOUT_SECONDS rests
+        at the broker while the next cycle mints a different id that
+        existing_order() cannot match. Nothing else notices -- gate 2 checks
+        POSITIONS, and a resting order is not a position yet.
+
+        Seen live on 2 Sep: a HOOD 101 sell repriced twice, never filled, and
+        sat at 0.50 while the market moved to 0.42/0.49. Had the next cycle
+        selected HOOD again it would have sent a second sell, and two fills
+        would have left the book short twice what the agent sized for, with the
+        position and portfolio caps both computed for one.
+
+        Fails to the SAFE side: if the call errors we return a wildcard, which
+        suppresses the action for that cycle. Skipping costs one cycle of delay;
+        duplicating sends an order we never decided to send.
+        """
+        try:
+            orders = await self.mcp.call("orders", status="open", limit=100)
+        except Exception:  # noqa: BLE001
+            return {"*"}
+        if not isinstance(orders, list):
+            return {"*"}
+        out: set[str] = set()
+        for o in orders:
+            if not isinstance(o, dict):
+                continue
+            coid = str(o.get("client_order_id") or "")
+            sym = str(o.get("symbol") or "")
+            if not sym or not coid.startswith("aw-c"):
+                continue  # not ours; a hand-placed order is not our business
+            if str(o.get("side") or "").lower() == side:
+                out.add(sym)
+        return out
+
+    async def _manage_book(self, positions, chains, record: dict, today) -> int:
+        """Evaluate exit rules on every short we hold. Returns how many closed.
+
+        No model is consulted. Entries fail closed on a model timeout, which
+        costs a trade and nothing worse; exits inverted would fail by leaving a
+        position open, so a safety control whose correctness depends on a
+        network call is the wrong shape. Everything here is arithmetic on
+        numbers this cycle already produced.
+        """
+        if not config.EXITS_ENABLED:
+            return 0
+
+        shorts = [p for p in positions if p.is_option and p.qty < 0]
+        if not shorts:
+            self.state.exit_streak.clear()
+            return 0
+
+        # Contracts that already have a close working at the broker.
+        #
+        # buy_to_close derives its client_order_id from the CYCLE number, so a
+        # close that does not fill inside ORDER_TIMEOUT_SECONDS is left resting
+        # and the next cycle mints a DIFFERENT id -- existing_order() cannot see
+        # it, and we would send a second buy on the same contract. Stack a few
+        # across cycles and the agent buys back more contracts than it is short,
+        # turning a closed put into a long one. Nothing downstream catches that:
+        # the position cap governs opening, and gate 2 governs entries.
+        working = await self._working_orders("buy")
+
+        rows: list[dict] = []
+        closed = 0
+        for p in shorts:
+            occ = parse_occ(p.symbol)
+            if occ is None:
+                # Handled by the unparseable-symbol path above, which has
+                # already halted entries. Nothing useful to say about a
+                # position whose strike we cannot read.
+                continue
+
+            # fresh=True for the same reason _close_largest uses it: this check
+            # only matters in a fast market, which is when a cached quote is
+            # most wrong.
+            spot = await self.data.spot(occ.root, fresh=True)
+
+            # Delta for the contract we HOLD, not the strike we would open
+            # today. Sourced from the chain this cycle already fetched; None
+            # when the chain failed, which evaluate() treats as absence of
+            # evidence rather than evidence of safety.
+            delta = None
+            for c in chains.get(occ.root, ()):
+                if c.symbol == p.symbol:
+                    delta = c.delta
+                    break
+
+            signal = exits.evaluate(
+                symbol=p.symbol, ticker=occ.root, strike=occ.strike, spot=spot,
+                delta=delta, market_value=p.market_value,
+                unrealized_pl=p.unrealized_pl,
+                dte=exits.dte_from_expiry(occ.expiry, today),
+                qty=int(abs(p.qty)),
+            )
+            streak = self.state.note_exit_trigger(p.symbol, signal is not None)
+            if signal is None:
+                continue
+
+            row = signal.row() | {"streak": streak}
+            if not exits.confirmed(signal, streak):
+                row["action"] = "watching"
+                rows.append(row)
+                self.log.note(f"  ~ {p.symbol} {signal.rule}: {signal.why} "
+                              f"(cycle {streak}/{config.EXIT_PERSIST_CYCLES})")
+                continue
+
+            # Already working at the broker: leave it alone rather than send a
+            # duplicate the position cap would never catch.
+            if "*" in working or p.symbol in working:
+                row["action"] = "close already working"
+                rows.append(row)
+                self.log.note(f"  ~ {p.symbol} close already resting at the broker")
+                continue
+
+            # Exits count against the daily order cap too. The cap is a
+            # this-is-looping detector, not an entry budget -- an exit rule
+            # stuck in a fire/refill loop is exactly the runaway it exists to
+            # stop, and counting only entries left that half unguarded.
+            if self.state.orders_today >= config.MAX_ORDERS_PER_DAY:
+                self.state.trip_breaker(
+                    f"order cap {config.MAX_ORDERS_PER_DAY} reached this session")
+                row["action"] = "blocked by daily order cap"
+                rows.append(row)
+                self.log.note(f"  !! {p.symbol} exit blocked: daily order cap "
+                              f"({self.state.orders_today}) -- something is looping")
+                break
+
+            self.state.orders_today += 1
+            f = await self.exec.buy_to_close(p.symbol, int(abs(p.qty)),
+                                             self.state.cycle)
+            row["action"] = "closed"
+            row["status"] = f.status
+            row["filled"] = f.filled_qty
+            rows.append(row)
+            self.log.note(f"  EXIT {p.symbol} {signal.rule}: {signal.why} "
+                          f"-> {f.status} {f.filled_qty}/{abs(int(p.qty))}")
+            if f.filled_qty:
+                self.state.forget_position(p.symbol)
+                closed += 1
+                # Both legs known here -- what we were paid and what we paid to
+                # get out -- so this is a MEASURED outcome, not an estimate.
+                ledger.record_close(
+                    symbol=p.symbol, ticker=occ.root, strike=occ.strike,
+                    expiry=occ.expiry, qty=int(abs(p.qty)),
+                    closed_by=ledger.CLOSED_BY_RULE, rule=signal.rule,
+                    cycle=self.state.cycle,
+                    credit=exits.credit_received(p.market_value, p.unrealized_pl),
+                    exit_cost=(f.fill_price * 100.0 * abs(p.qty)
+                               if f.fill_price is not None else None),
+                    spot=spot,
+                    dte=exits.dte_from_expiry(occ.expiry, today),
+                    note=signal.why)
+
+        if rows:
+            record["exits"] = rows
+        return closed
+
     async def _close_largest(self, positions) -> dict:
         """Circuit breaker must reduce exposure, not merely stop adding to it.
 
@@ -459,6 +965,22 @@ class Agent:
         moneyness, target, basis = max(ranked, key=lambda t: t[0])
         f = await self.exec.buy_to_close(target.symbol, int(abs(target.qty)),
                                          self.state.cycle)
+        # A breaker close is still a closed trade. Recording it matters more
+        # than the routine ones, not less: it is the only sample of what the
+        # circuit breaker actually costs, and without it the ledger would show
+        # a book that shrank for no recorded reason.
+        occ_t = parse_occ(target.symbol)
+        if occ_t is not None and f.filled_qty:
+            ledger.record_close(
+                symbol=target.symbol, ticker=occ_t.root, strike=occ_t.strike,
+                expiry=occ_t.expiry, qty=int(abs(target.qty)),
+                closed_by=ledger.CLOSED_BY_BREAKER, rule="drawdown_breaker",
+                cycle=self.state.cycle,
+                credit=exits.credit_received(target.market_value,
+                                             target.unrealized_pl),
+                exit_cost=(f.fill_price * 100.0 * abs(target.qty)
+                           if f.fill_price is not None else None),
+                note=f"ranked by {basis}")
         return {
             "closed": target.symbol,
             "ranked_by": basis,
@@ -519,6 +1041,19 @@ class Agent:
             self.log.note(f"  {p.symbol}: {f.status} filled {f.filled_qty}")
             results.append({"symbol": p.symbol, "status": f.status,
                             "filled": f.filled_qty})
+            # Human-initiated, but still an outcome. A ledger that only records
+            # the agent's own closes would report a partial history and quietly
+            # flatter whichever rules happened to run.
+            occ_p = parse_occ(p.symbol)
+            if occ_p is not None and f.filled_qty:
+                ledger.record_close(
+                    symbol=p.symbol, ticker=occ_p.root, strike=occ_p.strike,
+                    expiry=occ_p.expiry, qty=int(abs(p.qty)),
+                    closed_by=ledger.CLOSED_BY_HUMAN, rule="manual_flatten",
+                    cycle=self.state.cycle,
+                    credit=exits.credit_received(p.market_value, p.unrealized_pl),
+                    exit_cost=(f.fill_price * 100.0 * abs(p.qty)
+                               if f.fill_price is not None else None))
         self.state.trip_breaker("manual flatten")
         self.state.save()
         return {"closed": results}
@@ -601,4 +1136,18 @@ class Agent:
                         f"back on its own -- exiting so the supervisor can "
                         f"restart with a fresh one.")
                     return
+            # A dead MCP connection does not raise -- every caller catches
+            # and degrades, so the cycle completes looking healthy while
+            # deciding on nothing. The timeout counter is the only evidence,
+            # and this is the same deliberate exit the failure counter uses:
+            # the connection was opened outside this loop and cannot be rebuilt
+            # from inside it.
+            timeouts = getattr(self.mcp, "consecutive_timeouts", 0)
+            if timeouts >= config.MCP_MAX_CONSECUTIVE_TIMEOUTS:
+                self.log.note(
+                    f"\n{timeouts} consecutive MCP timeouts. The connection is "
+                    f"wedged, not slow -- exiting so the supervisor can restart "
+                    f"with a fresh one.")
+                return
+
             await asyncio.sleep(config.CYCLE_SECONDS)
