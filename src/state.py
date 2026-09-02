@@ -39,6 +39,11 @@ class State:
     # cross-sectional rank to a real time-series percentile as the week runs.
     iv_history: dict[str, list[float]] = field(default_factory=dict)
 
+    # --- consecutive cycles each held symbol has fired an exit trigger, so a
+    # single bad print cannot close a good position. Keyed by OCC symbol rather
+    # than ticker: two puts on one underlying are separate risks.
+    exit_streak: dict[str, int] = field(default_factory=dict)
+
     # --- circuit breaker latch (gate 5) ---
     breaker_tripped: bool = False
     breaker_reason: str = ""
@@ -112,6 +117,24 @@ class State:
 
     def ubt(self, ticker: str) -> float:
         return self.capital_days_used.get(ticker, 0.0)
+
+    def note_exit_trigger(self, symbol: str, fired: bool) -> int:
+        """Advance or clear this symbol's consecutive-trigger count.
+
+        Returns the streak INCLUDING this cycle, so a caller can compare it
+        against EXIT_PERSIST_CYCLES directly. A cycle that does not fire resets
+        to zero rather than decaying: two non-consecutive triggers separated by
+        a clean cycle are two bad prints, not a trend.
+        """
+        if not fired:
+            self.exit_streak.pop(symbol, None)
+            return 0
+        self.exit_streak[symbol] = self.exit_streak.get(symbol, 0) + 1
+        return self.exit_streak[symbol]
+
+    def forget_position(self, symbol: str) -> None:
+        """Drop a closed position's streak so a later re-entry starts clean."""
+        self.exit_streak.pop(symbol, None)
 
     def charge_capital(self, ticker: str, collateral: float, equity: float,
                        dte: int) -> None:

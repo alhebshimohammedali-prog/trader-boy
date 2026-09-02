@@ -30,6 +30,10 @@ class PositionDelta:
     closed: list[str] = field(default_factory=list)
     resized: list[tuple[str, float, float]] = field(default_factory=list)
     assigned: list[str] = field(default_factory=list)
+    # The prior Position objects for everything in `closed`. Kept because once
+    # a position leaves the book the broker will not tell us what it was worth,
+    # and the ledger needs its last mark to record an outcome at all.
+    closed_positions: dict = field(default_factory=dict)
 
     @property
     def quiet(self) -> bool:
@@ -97,6 +101,7 @@ class Reconciler:
 
         delta.opened = sorted(cur_syms - prev_syms)
         delta.closed = sorted(prev_syms - cur_syms)
+        delta.closed_positions = {s: self._prev[s] for s in delta.closed}
         for sym in sorted(prev_syms & cur_syms):
             before, after = self._prev[sym].qty, by_symbol[sym].qty
             if before != after:
