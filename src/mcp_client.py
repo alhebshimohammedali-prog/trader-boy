@@ -14,12 +14,15 @@ Two things this file exists to prevent (§7):
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from contextlib import AsyncExitStack
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
+
+import config
 from mcp.client.stdio import stdio_client
 
 # Logical operation -> candidate server tool names, most likely first.
@@ -102,6 +105,10 @@ class AlpacaMCP:
         self._stack: AsyncExitStack | None = None
         self.session: ClientSession | None = None
         self.available: dict[str, Any] = {}  # server tool name -> Tool
+        # Consecutive calls that timed out. Reset by any successful call. Read
+        # by the cycle loop, which exits when it gets too high so the
+        # supervisor can rebuild a connection this process cannot repair.
+        self.consecutive_timeouts = 0
         self.resolved: dict[str, str] = {}  # logical -> server tool name
 
     # -- credentials ---------------------------------------------------------
@@ -225,7 +232,27 @@ class AlpacaMCP:
         if name is None:
             raise ToolResolutionError(f"No server tool resolved for {logical!r}")
 
-        result = await self.session.call_tool(name, arguments=kwargs)
+        # A wedged server used to block here forever. asyncio.wait_for turns
+        # that into an exception, which is the only form the recovery machinery
+        # can act on: run_forever counts failures and exits so the supervisor
+        # restarts with a fresh connection. A hang produced no exception, so it
+        # produced no recovery.
+        #
+        # A timeout on place_option_order is safe to retry by construction:
+        # client_order_id is deterministic per (cycle, contract) and
+        # existing_order() is consulted before every submission, so an order
+        # that did land is adopted rather than duplicated.
+        try:
+            result = await asyncio.wait_for(
+                self.session.call_tool(name, arguments=kwargs),
+                timeout=config.MCP_CALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError as exc:
+            self.consecutive_timeouts += 1
+            raise RuntimeError(
+                f"{name} timed out after {config.MCP_CALL_TIMEOUT}s "
+                f"({self.consecutive_timeouts} consecutive)") from exc
+        self.consecutive_timeouts = 0
 
         texts: list[str] = []
         for block in result.content:

@@ -199,8 +199,9 @@ class Executor:
 
         dropped: list[str] = []
         order: dict | None = None
+        last_resp = None
         for attempt in range(1, config.MAX_REPRICE_ATTEMPTS + 2):
-            _, dropped = await self._submit(contract, qty, limit, coid)
+            last_resp, dropped = await self._submit(contract, qty, limit, coid)
             order = await self._poll(coid, config.ORDER_TIMEOUT_SECONDS)
 
             filled = fnum(order or {}, "filled_qty", "filled_quantity", default=0) or 0
@@ -218,6 +219,23 @@ class Executor:
 
         f = self._to_fill(order or {}, coid, contract, qty, mid, attempts=attempt)
         f.dropped_args = dropped
+
+        # An order we submitted but can never find is not a slow fill, it is a
+        # rejection we did not recognise.
+        #
+        # _submit raises only on the pydantic "validation error" text. Anything
+        # else Alpaca returns instead of an order -- insufficient buying power,
+        # a contract it will not open, a halt -- comes back as a plain string,
+        # is not an exception, and was then thrown away. The cycle logged
+        # `status=unknown, filled 0/1` and moved on, which reads like a market
+        # that did not fill rather than an order that never existed.
+        #
+        # Seen live on 2 Sep, cycles 29 and 30: two INTC 86 entries reported
+        # three attempts each, and the broker has no record of either. Keeping
+        # the response is the difference between "no fill" and "no order".
+        if order is None and last_resp is not None:
+            f.note = f"no order found after {attempt} attempt(s); "
+            f.note += f"broker returned: {str(last_resp)[:200]}"
         return f
 
     # -- normalisation -------------------------------------------------------
@@ -253,18 +271,46 @@ class Executor:
             return self._to_fill(prior, coid, stub, qty, ask, attempts=0,
                                  note="pre-existing close order")
 
+        # Canonical names only, qty and limit_price as STRINGS -- the same
+        # contract _submit() documents. This path was left behind when that
+        # fix landed: it still sent the option_symbol/quantity/order_type
+        # aliases beside the canonical keys and passed qty as an int, so the
+        # tool rejected it with the identical pydantic error the sell path was
+        # repaired for.
+        #
+        # It survived because nothing ever called it. buy_to_close is reachable
+        # only from _close_largest, which only the 3% drawdown breaker invokes,
+        # and the breaker has never fired live. scenarios.py exercises that path
+        # against a fake that accepts any keyword and any type, so the fake
+        # agreed with the broken call. A close path that has never been sent to
+        # a real endpoint is an untested close path, however green the suite is.
         args, dropped = self.mcp.fit_args(
             "place_option_order",
-            symbol=symbol, option_symbol=symbol,
-            side="buy", qty=qty, quantity=qty,
+            symbol=symbol,
+            side="buy",
+            qty=str(qty),
             type="market" if ask is None else "limit",
-            order_type="market" if ask is None else "limit",
-            limit_price=None if ask is None else round(ask + 0.01, 2),
+            limit_price=None if ask is None else f"{ask + 0.01:.2f}",
             time_in_force="day",
             client_order_id=coid,
             position_intent="buy_to_close",
         )
-        await self.mcp.call("place_option_order", **args)
+        resp = await self.mcp.call("place_option_order", **args)
+
+        # Same two-step as _submit: a rejection comes back as TEXT, not an
+        # exception, so an unhandled one would leave us polling for an order
+        # that was never created.
+        if isinstance(resp, str) and "unexpected_keyword_argument" in resp:
+            unexpected = {ln.strip() for ln in resp.splitlines()
+                          if ln.strip() and ln.strip() in args}
+            if unexpected:
+                for k in unexpected:
+                    args.pop(k, None)
+                dropped = list(dropped) + sorted(unexpected)
+                resp = await self.mcp.call("place_option_order", **args)
+
+        if isinstance(resp, str) and "validation error" in resp.lower():
+            raise RuntimeError(f"close rejected by tool validation: {resp[:300]}")
         order = await self._poll(coid, config.ORDER_TIMEOUT_SECONDS)
         stub = Contract(symbol=symbol, underlying="", strike=0.0, expiry="")
         f = self._to_fill(order or {}, coid, stub, qty, ask, attempts=1)
