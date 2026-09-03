@@ -124,6 +124,32 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0,
         crowding: float = 0.0) -> float:
     """pwt = w*age - ubt + opbt + reward - crowding.
 
+    Not invented here. This is the ADR algorithm -- Al-Hebshi, Daileg & Ramos,
+    "ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time"
+    (unpublished undergraduate thesis, University of the Cordilleras, 2025) --
+    a CPU scheduler with the resource swapped from processor time to capital.
+
+    ADR ranks jobs by Predicted Waiting Time: how long a process WOULD wait if
+    it were least prioritised. It runs whichever is closest to starving.
+
+        PWT = (CTL - AT) - UBT + OPBT         select max(PWT)
+
+        CTL - AT   time in the ready queue      -> age
+        UBT        burst time already used      -> collateral-days consumed
+        OPBT       OTHER jobs' remaining burst  -> other candidates' resource-time
+
+    The OPBT exclusion is load-bearing and it is inherited rather than designed:
+    a job's own remaining burst is left out of the sum over others, so a longer
+    job scores lower and shorter jobs win. Ported to capital, a candidate tying
+    up more equity for longer is deprioritised -- capital efficiency that falls
+    out of the scheduling semantics instead of being bolted on afterwards.
+
+    Two things deliberately differ from the source. The objective: ADR
+    minimises waiting time, this minimises idle capital. The tie-break: ADR uses
+    lowest PID, this uses tightest spread then ticker, because determinism
+    matters more here than arrival order. `reward` and `crowding` have no
+    counterpart in ADR and are argued for on their own terms below.
+
     age       cycles since this ticker last received capital
     ubt       collateral-days this ticker has already consumed
     opbt      committed resource-time of every OTHER queued candidate

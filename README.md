@@ -606,6 +606,30 @@ Pre-event work: `BUILD.md`, the specification. No code predates the event. The
 repository was initialised during the hackathon and every module in `src/` was
 written for it.
 
+Prior work: the allocation policy is **not new here**. It is the ADR algorithm,
+our own and unpublished — an undergraduate thesis, not peer-reviewed:
+
+> Al-Hebshi, M. A., Daileg, J. E. N., & Ramos, F. A. C. V. (2025).
+> *ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time*
+> [Unpublished undergraduate thesis]. University of the Cordilleras,
+> Baguio City, Philippines.
+
+ADR is a CPU scheduler. It ranks jobs by Predicted Waiting Time — how long a
+process *would* wait if it were least prioritised — and runs whichever is
+closest to starving: `PWT = (CTL - AT) - UBT + OPBT`, take the max. What is
+adapted here is the resource, not the mechanism: CPU time becomes collateral,
+burst time becomes collateral-days, and the ready queue becomes the set of
+contracts that cleared the gates.
+
+The scheduling semantics are carried over faithfully, including the OPBT
+exclusion — a job's own remaining burst is left out of the sum over others, so
+longer jobs score lower and shorter ones win. Ported to capital that becomes
+capital efficiency inherited from the scheduler rather than bolted on. Two
+things differ: the objective (ADR minimises waiting time, this minimises idle
+capital) and the tie-break (ADR uses lowest PID; this uses tightest spread then
+ticker, for determinism). The reward and crowding terms are additions, and are
+argued for separately above.
+
 Third-party components: `alpaca-mcp-server` (Alpaca, run via `uvx`), and
 `alpacahq/alpaca-skills` (Apache 2.0), which we read for reference but did not
 vendor. It shaped three choices: resolving MCP tool names at runtime, building
