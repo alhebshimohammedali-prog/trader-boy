@@ -125,9 +125,9 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0,
     """pwt = w*age - ubt + opbt + reward - crowding.
 
     Not invented here. This is the ADR algorithm -- Al-Hebshi, Daileg & Ramos,
-    "ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time"
-    (unpublished undergraduate thesis, University of the Cordilleras, 2025) --
-    a CPU scheduler with the resource swapped from processor time to capital.
+    "ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time",
+    Zenodo, 2025, doi:10.5281/zenodo.22265132 -- a CPU scheduler with the
+    resource swapped from processor time to capital.
 
     ADR ranks jobs by Predicted Waiting Time: how long a process WOULD wait if
     it were least prioritised. It runs whichever is closest to starving.

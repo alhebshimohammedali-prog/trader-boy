@@ -28,9 +28,8 @@ This licence covers the software in this repository. The allocation policy it
 implements is the ADR algorithm:
 
     Al-Hebshi, M. A., Daileg, J. E. N., & Ramos, F. A. C. V. (2025).
-    ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time
-    [Unpublished undergraduate thesis]. University of the Cordilleras,
-    Baguio City, Philippines.
+    ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time.
+    Zenodo. https://doi.org/10.5281/zenodo.22265132
 
 The MIT terms above permit reuse of this code. They are not a transfer of
 authorship of the underlying algorithm, and reuse of the scheduling policy is

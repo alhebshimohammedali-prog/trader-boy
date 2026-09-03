@@ -607,12 +607,15 @@ repository was initialised during the hackathon and every module in `src/` was
 written for it.
 
 Prior work: the allocation policy is **not new here**. It is the ADR algorithm,
-our own and unpublished — an undergraduate thesis, not peer-reviewed:
+our own, published as a preprint a year before this project began:
 
 > Al-Hebshi, M. A., Daileg, J. E. N., & Ramos, F. A. C. V. (2025).
-> *ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time*
-> [Unpublished undergraduate thesis]. University of the Cordilleras,
-> Baguio City, Philippines.
+> *ADR Algorithm: A Next Gen Scheduling for Minimizing Waiting Time*.
+> Zenodo. https://doi.org/10.5281/zenodo.22265132
+>
+> Originating as undergraduate work at the University of the Cordilleras,
+> Baguio City, Philippines, and deposited publicly on 16 July 2025 --
+> thirteen months before this repository's first commit.
 
 ADR is a CPU scheduler. It ranks jobs by Predicted Waiting Time — how long a
 process *would* wait if it were least prioritised — and runs whichever is
