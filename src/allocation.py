@@ -200,6 +200,17 @@ def pwt(age: int, ubt: float, opbt: float, reward: float = 0.0,
     # index already suffered when first_qualified never moved. The smooth form
     # keeps the ordering (25 cycles still ranks below 27) while bounding the
     # total, and preserves the original slope at age 1.
+    # Clamped at zero because the saturating form has a pole at
+    # age = -AGE_HALF_CYCLES and blows up approaching it: age -9 yields -9.0,
+    # a larger distortion than the unbounded term this replaced, and age -10
+    # raises ZeroDivisionError inside the allocator.
+    #
+    # A negative age is not hypothetical. `age` is cycle - first_qualified, and
+    # a state restore can leave first_qualified ahead of a rewound cycle
+    # counter; the live logs already show a minimum of -2. It is also
+    # meaningless -- "cycles since last funded" cannot be negative -- so
+    # clamping is the correct reading, not merely the safe one.
+    age = max(0, age)
     aged = config.AGE_WEIGHT * config.AGE_HALF_CYCLES * age / (age + config.AGE_HALF_CYCLES)
     return aged - ubt + opbt + reward - crowding
 
